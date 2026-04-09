@@ -11,6 +11,15 @@ export default function UnprocessedItems() {
   const [leftWidth, setLeftWidth] = useState(340);
   const dragging = useRef(false);
   const containerRef = useRef(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panning = useRef(null); // { startX, startY, origX, origY }
+
+  // Reset zoom/pan when changing photo or closing
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [lightbox?.idx, lightbox?.photos]);
 
   const ic = "w-full px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500";
   const lc = "block text-xs font-semibold text-stone-500 uppercase tracking-wide mb-1";
@@ -340,23 +349,53 @@ export default function UnprocessedItems() {
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-2 bg-stone-800">
             <span className="text-white/70 text-sm">{lightbox.idx + 1} / {lightbox.photos.length}</span>
-            <button onClick={() => setLightbox(null)}
-              className="w-7 h-7 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-white text-sm">
-              ×
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setZoom(z => Math.max(1, z - 0.5))}
+                className="w-7 h-7 bg-white/10 hover:bg-white/20 rounded text-white text-sm font-bold">−</button>
+              <span className="text-white/70 text-xs w-10 text-center">{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom(z => Math.min(8, z + 0.5))}
+                className="w-7 h-7 bg-white/10 hover:bg-white/20 rounded text-white text-sm font-bold">+</button>
+              <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+                className="px-2 h-7 bg-white/10 hover:bg-white/20 rounded text-white text-[10px] font-medium">Reset</button>
+              <button onClick={() => setLightbox(null)}
+                className="w-7 h-7 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-white text-sm ml-1">
+                ×
+              </button>
+            </div>
           </div>
 
           {/* Image */}
-          <div className="flex-1 flex items-center justify-center p-4 relative min-h-0">
-            <img src={lightbox.photos[lightbox.idx]} alt="" className="max-w-full max-h-full object-contain rounded" />
+          <div className="flex-1 flex items-center justify-center p-4 relative min-h-0 overflow-hidden"
+            onWheel={e => {
+              e.preventDefault();
+              setZoom(z => Math.max(1, Math.min(8, z + (e.deltaY < 0 ? 0.25 : -0.25))));
+            }}
+            onMouseDown={e => {
+              if (zoom <= 1) return;
+              panning.current = { startX: e.clientX, startY: e.clientY, origX: pan.x, origY: pan.y };
+            }}
+            onMouseMove={e => {
+              if (!panning.current) return;
+              setPan({
+                x: panning.current.origX + (e.clientX - panning.current.startX),
+                y: panning.current.origY + (e.clientY - panning.current.startY),
+              });
+            }}
+            onMouseUp={() => { panning.current = null; }}
+            onMouseLeave={() => { panning.current = null; }}
+            style={{ cursor: zoom > 1 ? (panning.current ? "grabbing" : "grab") : "default" }}>
+            <img src={lightbox.photos[lightbox.idx]} alt=""
+              draggable={false}
+              className="max-w-full max-h-full object-contain rounded select-none pointer-events-none"
+              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transition: panning.current ? "none" : "transform 0.1s" }} />
 
-            {lightbox.idx > 0 && (
+            {lightbox.idx > 0 && zoom === 1 && (
               <button onClick={() => setLightbox({ ...lightbox, idx: lightbox.idx - 1 })}
                 className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 bg-white/15 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-lg font-bold">
                 ‹
               </button>
             )}
-            {lightbox.idx < lightbox.photos.length - 1 && (
+            {lightbox.idx < lightbox.photos.length - 1 && zoom === 1 && (
               <button onClick={() => setLightbox({ ...lightbox, idx: lightbox.idx + 1 })}
                 className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 bg-white/15 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-lg font-bold">
                 ›
