@@ -33,20 +33,7 @@ export async function qry(table, { schema = "public", select, filters, order, in
 export async function lookupBarcode(barcode) {
   if (!barcode || barcode.length < 3) return null;
 
-  // Try the RPC function first
-  try {
-    const res = await fetch(`${SB_URL}/rest/v1/rpc/lookup_barcode`, {
-      method: "POST",
-      headers: sbH("posbe"),
-      body: JSON.stringify({ barcode }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.length > 0) return data[0];
-    }
-  } catch (e) { console.error("RPC lookup failed:", e); }
-
-  // Fallback: direct query
+  // Query v_items view (has all fields including unit and sub-category)
   try {
     const res = await fetch(
       `${SB_URL}/rest/v1/v_items?UPC_TX=eq.${encodeURIComponent(barcode)}&select=Item_ID,Name_TX,Store_Name_TX,Size_TX,Mfg_ID,Mfg_Name,Category_ID,Category_Name,Dept_ID,Dept_Name,Sub_Category_ID,Price,Ref_Unit_CD,Unit_Name&limit=1`,
@@ -123,20 +110,20 @@ export async function checkBarcodeInSystem(barcode) {
         subCatIds.length ? fetch(`${SB_URL}/rest/v1/Sub_Category?Sub_Category_ID=in.(${subCatIds.join(",")})&select=Sub_Category_ID,Name_TX`, { headers: sbH("posbe") }).then(r => r.json()).catch(() => []) : [],
       ]);
 
-      const mfgMap = Object.fromEntries(mfgs.map(m => [m.Vendor_ID, m.Vendor_Name_TX]));
-      const deptMap = Object.fromEntries(depts.map(d => [d.Dept_ID, d.Name_TX]));
-      const catMap = Object.fromEntries(cats.map(c => [c.Category_ID, c.Name_TX]));
-      const subCatMap = Object.fromEntries(subCats.map(s => [s.Sub_Category_ID, s.Name_TX]));
+      const mfgMap = Object.fromEntries(mfgs.map(m => [String(m.Vendor_ID), m.Vendor_Name_TX]));
+      const deptMap = Object.fromEntries(depts.map(d => [String(d.Dept_ID), d.Name_TX]));
+      const catMap = Object.fromEntries(cats.map(c => [String(c.Category_ID), c.Name_TX]));
+      const subCatMap = Object.fromEntries(subCats.map(s => [String(s.Sub_Category_ID), s.Name_TX]));
 
       items.forEach(i => {
-        i._mfg_name = mfgMap[i.mfg_id] || "";
-        i._dept_name = deptMap[i.dept_id] || "";
-        i._category_name = catMap[i.category_id] || "";
-        i._sub_category_name = subCatMap[i.sub_category_id] || "";
+        i._mfg_name = mfgMap[String(i.mfg_id)] || "";
+        i._dept_name = deptMap[String(i.dept_id)] || "";
+        i._category_name = catMap[String(i.category_id)] || "";
+        i._sub_category_name = subCatMap[String(i.sub_category_id)] || "";
       });
     }
     return items;
-  } catch { return []; }
+  } catch (err) { console.error("useLocalItems error:", err); return []; }
 }
 
 // ─── Item location helpers ───
@@ -221,7 +208,22 @@ export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", p
       const range = res.headers.get("content-range");
       if (range) { const t = parseInt(range.split("/")[1]); if (!isNaN(t)) setTotal(t); }
       const data = await res.json();
-      setItems(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+
+      // Resolve mfg names for this page of items
+      const mfgIds = [...new Set(list.map(i => i.mfg_id).filter(Boolean))];
+      if (mfgIds.length) {
+        try {
+          const mfgs = await fetch(
+            `${SB_URL}/rest/v1/Vendor?Vendor_ID=in.(${mfgIds.join(",")})&select=Vendor_ID,Vendor_Name_TX`,
+            { headers: sbH("posbe") }
+          ).then(r => r.json());
+          const mfgMap = Object.fromEntries(mfgs.map(m => [String(m.Vendor_ID), m.Vendor_Name_TX]));
+          list.forEach(i => { i._mfg_name = mfgMap[String(i.mfg_id)] || ""; });
+        } catch {}
+      }
+
+      setItems(list);
     }).catch(err => { console.error(err); setItems([]); })
       .finally(() => setLoading(false));
   }, [search, sortBy, sortDir, page, cfKey, refreshTick]);
@@ -235,7 +237,7 @@ export function useOrders() {
   const [loading, setLoading] = useState(true);
   const refresh = useCallback(() => {
     setLoading(true);
-    qry("store_orders", { select: "*", order: "created_at.desc", limit: 500 })
+    qry("store_orders", { select: "*", filters: "status=neq.draft", order: "created_at.desc", limit: 500 })
       .then(setOrders).catch(console.error).finally(() => setLoading(false));
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
@@ -249,7 +251,7 @@ export async function fetchItemsForNeeds() {
   const batchSize = 1000;
   while (true) {
     const res = await fetch(
-      `${SB_URL}/rest/v1/local_items?active_yn=eq.Y&select=id,name,size,upc,retail_price,cases_on_hand,warehouse_location,store_location,expiration_date,dept_id,category_id&order=store_location.asc.nullslast,name.asc`,
+      `${SB_URL}/rest/v1/local_items?active_yn=eq.Y&select=id,name,size,upc,retail_price,cases_on_hand,warehouse_location,store_location,expiration_date,dept_id,category_id,mfg_id,case_size,ref_unit_cd&order=store_location.asc.nullslast,name.asc`,
       { headers: { ...sbH("public"), Range: `${offset}-${offset + batchSize - 1}` } }
     );
     const data = await res.json();
@@ -257,6 +259,18 @@ export async function fetchItemsForNeeds() {
     allItems.push(...data);
     if (data.length < batchSize) break;
     offset += batchSize;
+  }
+  // Resolve mfg names
+  const mfgIds = [...new Set(allItems.map(i => i.mfg_id).filter(Boolean))];
+  if (mfgIds.length) {
+    try {
+      const mfgs = await fetch(
+        `${SB_URL}/rest/v1/Vendor?Vendor_ID=in.(${mfgIds.join(",")})&select=Vendor_ID,Vendor_Name_TX`,
+        { headers: sbH("posbe") }
+      ).then(r => r.json());
+      const mfgMap = Object.fromEntries(mfgs.map(m => [String(m.Vendor_ID), m.Vendor_Name_TX]));
+      allItems.forEach(i => { i._mfg_name = mfgMap[String(i.mfg_id)] || ""; });
+    } catch {}
   }
   return allItems;
 }
@@ -313,9 +327,11 @@ export async function searchLocations(typed) {
   const data = await qry("warehouse_locations", {
     select: "id,label,section,aisle",
     filters: `${filter}active_yn=eq.Y`,
-    order: "sort_order.asc,label.asc",
     limit: 100,
   });
+  // Natural sort so 2A < 13A
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  data.sort((a, b) => collator.compare(a.label || "", b.label || ""));
   const ctx = (l) => [l.section, l.aisle].filter(Boolean).join(" / ");
   return data.map(l => ({ value: l.label, label: l.label + (ctx(l) ? `  —  ${ctx(l)}` : "") }));
 }

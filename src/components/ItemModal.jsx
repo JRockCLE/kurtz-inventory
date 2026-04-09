@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits } from "../lib/hooks";
+import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations } from "../lib/hooks";
 import SearchSelect from "./SearchSelect";
 
 const SB_URL = "https://veqsqzzymxjniagodkey.supabase.co";
@@ -48,7 +48,7 @@ function normalizeItem(item, vendorMap, deptMap, catMap) {
     return {
       upc: item.upc || "",
       mfg_id: item.mfg_id || "",
-      mfg_name: item.mfg_id ? (vendorMap[item.mfg_id] || "") : "",
+      mfg_name: item._mfg_name || (item.mfg_id ? (vendorMap[item.mfg_id] || "") : ""),
       name: item.name || "",
       size: item.size || "",
       expDate: item.expiration_date || null,
@@ -94,12 +94,13 @@ function normalizeItem(item, vendorMap, deptMap, catMap) {
   };
 }
 
-export default function ItemModal({ item, categories, depts, vendors, onSave, onClose }) {
+export default function ItemModal({ item, categories, depts, vendors, units, onSave, onClose }) {
   const barcodeRef = useRef(null);
 
   const vendorMap = Object.fromEntries((vendors || []).map(v => [v.Vendor_ID, v.Vendor_Name_TX]));
   const deptMap = Object.fromEntries((depts || []).map(d => [d.Dept_ID, d.Name_TX]));
   const catMap = Object.fromEntries((categories || []).map(c => [c.Category_ID, c.Name_TX]));
+  const unitMap = Object.fromEntries((units || []).map(u => [String(u.Unit_ID), u.Unit_Name_TX]));
 
   const normalized = normalizeItem(item, vendorMap, deptMap, catMap);
   const isEdit = !!item && !!normalized.localId;
@@ -111,7 +112,7 @@ export default function ItemModal({ item, categories, depts, vendors, onSave, on
     name: normalized.name,
     size: normalized.size,
     unit_cd: normalized.ref_unit_cd || "",
-    unit_name: "",
+    unit_name: normalized.ref_unit_cd ? (unitMap[String(normalized.ref_unit_cd)] || "") : "",
     expiration_date: normalized.expDate ? new Date(normalized.expDate).toISOString().slice(0, 10) : "",
     dept_id: normalized.dept_id,
     dept_name: normalized.dept_name,
@@ -120,7 +121,7 @@ export default function ItemModal({ item, categories, depts, vendors, onSave, on
     sub_category_id: normalized.sub_category_id || "",
     sub_category_name: "",
     retail_price: normalized.price,
-    cost: normalized.cost || "",
+    case_cost: normalized.cost && normalized.case_size ? (parseFloat(normalized.cost) * parseInt(normalized.case_size)).toFixed(2) : (normalized.cost || ""),
     case_size: normalized.case_size || "",
     cases_on_hand: normalized.cases_on_hand || 0,
     warehouse_location: normalized.warehouse_location || "",
@@ -198,7 +199,7 @@ export default function ItemModal({ item, categories, depts, vendors, onSave, on
         category_id: f.category_id ? parseInt(f.category_id) : null,
         sub_category_id: f.sub_category_id ? parseInt(f.sub_category_id) : null,
         retail_price: f.retail_price ? parseFloat(f.retail_price) : null,
-        cost: f.cost ? parseFloat(f.cost) : null,
+        cost: f.case_cost && f.case_size ? parseFloat((parseFloat(f.case_cost) / parseInt(f.case_size)).toFixed(2)) : null,
         case_size: f.case_size ? parseInt(f.case_size) : null,
         cases_on_hand: parseInt(f.cases_on_hand) || 0,
         warehouse_location: f.warehouse_location.trim() || null,
@@ -267,16 +268,21 @@ export default function ItemModal({ item, categories, depts, vendors, onSave, on
                 <input className={ic} value={f.name} onChange={e => set("name", e.target.value)} placeholder="e.g., Classic Roast Coffee" />
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div><label className={lc}>Size</label><input className={ic} value={f.size} onChange={e => set("size", e.target.value)} placeholder="e.g., 30.5" /></div>
-              <div>
-                <label className={lc}>Unit of Measure</label>
+            <div className="flex gap-3">
+              <div style={{ width: Math.max(60, Math.min(120, (f.size?.toString().length || 3) * 14 + 30)) }}>
+                <label className={lc}>Size</label><input className={ic} value={f.size} onChange={e => set("size", e.target.value)} placeholder="e.g., 30.5" />
+              </div>
+              <div style={{ width: Math.max(80, Math.min(150, (f.unit_name?.length || 8) * 9 + 30)) }}>
+                <label className={lc}>Unit</label>
                 <SearchSelect value={f.unit_cd} displayValue={f.unit_name}
                   fetchOptions={searchUnits}
                   onSelect={(val, label) => { set("unit_cd", val || ""); set("unit_name", label || ""); }}
                   placeholder="Type to search..." />
               </div>
-              <div><label className={lc}>Expiration Date</label><input type="date" className={ic} value={f.expiration_date} onChange={e => set("expiration_date", e.target.value)} /></div>
+              <div className="w-[170px] shrink-0">
+                <label className={lc}>Expiration Date</label><input type="date" className={ic} value={f.expiration_date} onChange={e => set("expiration_date", e.target.value)} />
+              </div>
+              <div className="flex-1" />
             </div>
           </div>
 
@@ -311,12 +317,16 @@ export default function ItemModal({ item, categories, depts, vendors, onSave, on
           {/* ─── PRICING & COST ─── */}
           <div className="border-t border-stone-200 pt-4 pb-4">
             <div className="text-[10px] font-bold text-white uppercase tracking-wider mb-3 bg-stone-600 -mx-5 px-5 py-1.5">Pricing &amp; Cost</div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-4 gap-3">
               <div><label className={lc}>Retail Price</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">$</span>
                 <input type="number" step="0.01" className={`${ic} pl-7`} value={f.retail_price} onChange={e => set("retail_price", e.target.value)} placeholder="0.00" /></div></div>
-              <div><label className={lc}>Cost (per unit)</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">$</span>
-                <input type="number" step="0.01" className={`${ic} pl-7`} value={f.cost} onChange={e => set("cost", e.target.value)} placeholder="0.00" /></div></div>
+              <div><label className={lc}>Cost Per Case</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">$</span>
+                <input type="number" step="0.01" className={`${ic} pl-7`} value={f.case_cost} onChange={e => set("case_cost", e.target.value)} placeholder="0.00" /></div></div>
               <div><label className={lc}>Units Per Case</label><input type="number" className={ic} value={f.case_size} onChange={e => set("case_size", e.target.value)} placeholder="12" /></div>
+              <div><label className={lc}>Unit Cost</label>
+                <div className="px-3 py-2 text-sm text-stone-600 font-medium">
+                  {f.case_cost && f.case_size ? `$${(parseFloat(f.case_cost) / parseInt(f.case_size)).toFixed(2)}` : "—"}
+                </div></div>
             </div>
           </div>
 
@@ -325,7 +335,15 @@ export default function ItemModal({ item, categories, depts, vendors, onSave, on
             <div className="text-[10px] font-bold text-white uppercase tracking-wider mb-3 bg-stone-600 -mx-5 px-5 py-1.5">Inventory &amp; Locations</div>
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div><label className={lc}>Cases On Hand</label><input type="number" className={ic} value={f.cases_on_hand} onChange={e => set("cases_on_hand", e.target.value)} placeholder="0" /></div>
-              <div><label className={lc}>Warehouse Location</label><input className={ic} value={f.warehouse_location} onChange={e => set("warehouse_location", e.target.value)} placeholder="e.g., 3-B" /></div>
+              <div>
+                <label className={lc}>Warehouse Location</label>
+                <SearchSelect value={f.warehouse_location} displayValue={f.warehouse_location}
+                  fetchOptions={searchLocations}
+                  onSelect={(v) => set("warehouse_location", v || "")}
+                  placeholder="Type to search..." />
+                <button type="button" onClick={() => set("_showLocModal", true)}
+                  className="text-[11px] text-amber-600 hover:text-amber-700 font-medium mt-1">+ Add new location</button>
+              </div>
               <div><label className={lc}>Store Location</label><input className={ic} value={f.store_location} onChange={e => set("store_location", e.target.value)} placeholder="e.g., Aisle 4" /></div>
             </div>
             <div><label className={lc}>Notes</label><input className={ic} value={f.notes} onChange={e => set("notes", e.target.value)} placeholder="Additional info..." /></div>
@@ -341,6 +359,70 @@ export default function ItemModal({ item, categories, depts, vendors, onSave, on
               {saving ? "Saving..." : isEdit ? "Save Changes" : "Add Item"}
             </button>
           </div>
+        </div>
+      </div>
+      {/* ─── Add Location Modal ─── */}
+      {f._showLocModal && <AddLocationModal ic={ic} lc={lc} onClose={(label) => {
+        if (label) set("warehouse_location", label);
+        set("_showLocModal", false);
+      }} />}
+    </div>
+  );
+}
+
+function AddLocationModal({ ic, lc, onClose }) {
+  const [loc, setLoc] = useState({ section: "", row: "", slot: "", whSection: "", aisle: "", notes: "" });
+  const [saving, setSaving] = useState(false);
+  const s = (k, v) => setLoc(prev => ({ ...prev, [k]: v }));
+  const label = loc.section && loc.row
+    ? `${loc.section}${loc.row.toUpperCase()}${loc.slot ? `-${loc.slot}` : ""}`
+    : "";
+
+  const save = async () => {
+    if (!label) return;
+    setSaving(true);
+    try {
+      await qry("warehouse_locations", {
+        insert: {
+          label,
+          column_num: parseInt(loc.section),
+          row_letter: loc.row.toUpperCase().trim(),
+          slot_num: loc.slot ? parseInt(loc.slot) : null,
+          section: loc.whSection.trim() || null,
+          aisle: loc.aisle.trim() || null,
+          notes: loc.notes.trim() || null,
+          active_yn: "Y",
+        },
+      });
+      onClose(label);
+    } catch (err) { alert("Error: " + err.message); setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40" onClick={() => onClose(null)}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-stone-200">
+          <h3 className="text-base font-bold text-stone-800">Add New Location</h3>
+        </div>
+        <div className="px-5 py-4 space-y-3">
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className={lc}>Section # *</label><input type="number" className={ic} value={loc.section} onChange={e => s("section", e.target.value)} placeholder="1" autoFocus /></div>
+            <div><label className={lc}>Row *</label><input className={ic} value={loc.row} onChange={e => s("row", e.target.value)} placeholder="A" maxLength={2} /></div>
+            <div><label className={lc}>Slot</label><input type="number" className={ic} value={loc.slot} onChange={e => s("slot", e.target.value)} placeholder="—" /></div>
+          </div>
+          {label && <div className="text-sm text-stone-700 font-mono font-bold">Label: {label}</div>}
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={lc}>WH Section</label><input className={ic} value={loc.whSection} onChange={e => s("whSection", e.target.value)} placeholder="A" /></div>
+            <div><label className={lc}>Aisle</label><input className={ic} value={loc.aisle} onChange={e => s("aisle", e.target.value)} placeholder="A1" /></div>
+          </div>
+          <div><label className={lc}>Notes</label><input className={ic} value={loc.notes} onChange={e => s("notes", e.target.value)} placeholder="Optional..." /></div>
+        </div>
+        <div className="flex justify-end gap-3 px-5 py-4 border-t border-stone-200 bg-stone-50 rounded-b-xl">
+          <button onClick={() => onClose(null)} className="px-4 py-2 text-sm text-stone-600 hover:text-stone-800">Cancel</button>
+          <button onClick={save} disabled={saving || !label}
+            className="px-5 py-2 bg-amber-600 text-white rounded-lg text-sm font-bold hover:bg-amber-700 disabled:opacity-50">
+            {saving ? "Adding..." : "Add Location"}
+          </button>
         </div>
       </div>
     </div>

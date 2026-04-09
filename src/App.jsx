@@ -24,8 +24,8 @@ export default function App() {
   const tabs = [
     { id: "receiving", label: "Receiving", emoji: "📦" },
     { id: "items", label: "Items", emoji: "🏷️" },
-    { id: "needs", label: "Store Needs", emoji: "📋" },
-    { id: "orders", label: "Orders", emoji: "🚛", badge: pendingCount },
+    { id: "needs", label: "Store Lists", emoji: "📋" },
+    { id: "orders", label: "Pick Lists", emoji: "🚛", badge: pendingCount },
   ];
 
   const handleEditItem = (item) => { setEditItem(item); setShowEditModal(true); };
@@ -79,12 +79,12 @@ export default function App() {
         {tab === "items" && <Items data={data} onEdit={handleEditItem} refreshTick={itemsRefresh} />}
         {tab === "needs" && <StoreNeeds data={data} onSubmitOrder={() => { setTab("orders"); refreshOrders(); }} />}
         {tab === "orders" && !selectedOrder && <Orders orders={orders} loading={ordersLoading} onSelect={id => setSelectedOrder(id)} />}
-        {tab === "orders" && selectedOrder && <PickList orderId={selectedOrder} onBack={() => { setSelectedOrder(null); refreshOrders(); }} onUpdate={refreshOrders} />}
+        {tab === "orders" && selectedOrder && <PickList orderId={selectedOrder} data={data} onBack={() => { setSelectedOrder(null); refreshOrders(); }} onUpdate={refreshOrders} />}
         {tab === "settings" && <Settings />}
       </div>
 
       {showEditModal && editItem && (
-        <ItemModal item={editItem} categories={data.categories} depts={data.depts} vendors={[]}
+        <ItemModal item={editItem} categories={data.categories} depts={data.depts} vendors={[]} units={data.units}
           onClose={() => { setShowEditModal(false); setEditItem(null); }} onSave={handleEditSave} />
       )}
     </div>

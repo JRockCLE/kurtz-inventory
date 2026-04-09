@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useLocalItems, qry } from "../lib/hooks";
-import { fmt$, fmtDate } from "../lib/helpers";
+import { fmt$, fmtDate, naturalCompare } from "../lib/helpers";
 
 // Measure text width using an offscreen canvas
 const _canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
@@ -27,9 +27,16 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
     setSearchTimer(setTimeout(() => { setSearch(val); setPage(0); }, 300));
   };
 
-  const { items, total, loading, pageSize } = useLocalItems({
+  const { items: rawItems, total, loading, pageSize } = useLocalItems({
     search, sortBy, sortDir, page, refreshTick: refreshTick + localTick,
   });
+
+  // Client-side natural sort for warehouse_location (server can't do natural sort)
+  const items = useMemo(() => {
+    if (sortBy !== "warehouse_location") return rawItems;
+    const sorted = [...rawItems].sort((a, b) => naturalCompare(a.warehouse_location, b.warehouse_location));
+    return sortDir === "desc" ? sorted.reverse() : sorted;
+  }, [rawItems, sortBy, sortDir]);
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -164,7 +171,7 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
                 const qty = item.cases_on_hand || 0;
                 const isLow = qty > 0 && qty <= 5;
                 const isExpired = item.expiration_date && new Date(item.expiration_date) < new Date();
-                const mfgRaw = vendorMap[item.mfg_id] || "—";
+                const mfgRaw = item._mfg_name || vendorMap[item.mfg_id] || "—";
                 const mfgShort = mfgRaw.length > 16 ? mfgRaw.slice(0, 14) + "…" : mfgRaw;
 
                 return (

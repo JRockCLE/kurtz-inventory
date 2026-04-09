@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { qry } from "../lib/hooks";
+import { naturalCompare } from "../lib/helpers";
 
 export default function Locations() {
   const [locations, setLocations] = useState([]);
@@ -41,13 +42,20 @@ export default function Locations() {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = search
-    ? locations.filter(l =>
-        l.label?.toLowerCase().includes(search.toLowerCase()) ||
-        l.section?.toLowerCase().includes(search.toLowerCase()) ||
-        l.aisle?.toLowerCase().includes(search.toLowerCase()) ||
-        l.notes?.toLowerCase().includes(search.toLowerCase()))
-    : locations;
+  const filtered = useMemo(() => {
+    let list = search
+      ? locations.filter(l =>
+          l.label?.toLowerCase().includes(search.toLowerCase()) ||
+          l.section?.toLowerCase().includes(search.toLowerCase()) ||
+          l.aisle?.toLowerCase().includes(search.toLowerCase()) ||
+          l.notes?.toLowerCase().includes(search.toLowerCase()))
+      : locations;
+    if (sortBy === "label") {
+      list = [...list].sort((a, b) => naturalCompare(a.label, b.label));
+      if (sortDir === "desc") list.reverse();
+    }
+    return list;
+  }, [locations, search, sortBy, sortDir]);
 
   const toggleSort = (col) => {
     if (sortBy === col) setSortDir(d => d === "asc" ? "desc" : "asc");

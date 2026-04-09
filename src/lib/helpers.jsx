@@ -1,5 +1,14 @@
 export const fmt$ = (n) => n != null ? `$${parseFloat(n).toFixed(2)}` : "—";
 
+// Natural/smart sort comparator — sorts "2B" before "13A", etc.
+const _collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+export const naturalCompare = (a, b) => {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return _collator.compare(String(a), String(b));
+};
+
 export const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d);

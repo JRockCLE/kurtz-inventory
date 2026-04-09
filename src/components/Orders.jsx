@@ -15,7 +15,7 @@ export default function Orders({ orders, loading, onSelect }) {
         <div className="p-12 text-center">
           <p className="text-4xl mb-2">📦</p>
           <p className="text-stone-500 text-sm">No orders yet</p>
-          <p className="text-stone-400 text-xs mt-1">Use the Store Needs tab to create your first order</p>
+          <p className="text-stone-400 text-xs mt-1">Use the Store Lists tab to create your first list</p>
         </div>
       ) : (
         <div className="divide-y divide-stone-200">

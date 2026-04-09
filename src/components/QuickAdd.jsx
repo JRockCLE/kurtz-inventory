@@ -31,6 +31,8 @@ export default function QuickAdd() {
   const scannerRef = useRef(null);
   const scannerDivId = "qr-reader";
 
+  const [expDate, setExpDate] = useState("");
+
   // Photo state for unprocessed items
   const [photos, setPhotos] = useState([]); // [{ file, preview }]
   const [notes, setNotes] = useState("");
@@ -53,6 +55,7 @@ export default function QuickAdd() {
   const resetForm = useCallback(() => {
     setBarcode("");
     setLocation("");
+    setExpDate("");
     setStatus(null);
     setPhotos([]);
     setNotes("");
@@ -115,8 +118,11 @@ export default function QuickAdd() {
       });
       const isFirst = !existingLocs.length;
       try { await addItemLocation(itemId, location, isFirst); } catch { /* dup */ }
-      if (isFirst) {
-        await qry("local_items", { update: { warehouse_location: location }, match: { id: itemId } });
+      const itemUpdate = {};
+      if (isFirst) itemUpdate.warehouse_location = location;
+      if (expDate) itemUpdate.expiration_date = expDate;
+      if (Object.keys(itemUpdate).length) {
+        await qry("local_items", { update: itemUpdate, match: { id: itemId } });
       }
       setLog(prev => [{ name: status.item.name, upc: status.upc, location, type: "assigned", time: new Date() }, ...prev].slice(0, 50));
       resetForm();
@@ -142,6 +148,7 @@ export default function QuickAdd() {
         insert: {
           upc: status.upc,
           warehouse_location: location || null,
+          expiration_date: expDate || null,
           photos: photoUrls,
           notes: notes.trim() || null,
         },
@@ -246,15 +253,23 @@ export default function QuickAdd() {
 
           {/* ─── FOUND / CREATED: assign location ─── */}
           {status && (status.type === "found" || status.type === "created") && (
-            <div>
-              <label className={lc}>Assign Location</label>
-              <div ref={locationRef}>
-                <SearchSelect value={location} displayValue={location}
-                  fetchOptions={searchLocations}
-                  onSelect={(v) => setLocation(v || "")}
-                  placeholder="Type or select location..." />
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={lc}>Expiration Date</label>
+                  <input type="date" className={ic} value={expDate} onChange={e => setExpDate(e.target.value)} />
+                </div>
+                <div>
+                  <label className={lc}>Assign Location</label>
+                  <div ref={locationRef}>
+                    <SearchSelect value={location} displayValue={location}
+                      fetchOptions={searchLocations}
+                      onSelect={(v) => setLocation(v || "")}
+                      placeholder="Type or select location..." />
+                  </div>
+                </div>
               </div>
-              <div className="flex gap-2 pt-2">
+              <div className="flex gap-2">
                 <button onClick={assignLocation} disabled={saving || !location}
                   className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
                   {saving ? "Saving..." : "Save"}
@@ -293,13 +308,19 @@ export default function QuickAdd() {
                   className="hidden" onChange={handlePhotoCapture} />
               </div>
 
-              {/* Location */}
-              <div>
-                <label className={lc}>Location</label>
-                <SearchSelect value={location} displayValue={location}
-                  fetchOptions={searchLocations}
-                  onSelect={(v) => setLocation(v || "")}
-                  placeholder="Type or select location..." />
+              {/* Exp Date + Location */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={lc}>Expiration Date</label>
+                  <input type="date" className={ic} value={expDate} onChange={e => setExpDate(e.target.value)} />
+                </div>
+                <div>
+                  <label className={lc}>Location</label>
+                  <SearchSelect value={location} displayValue={location}
+                    fetchOptions={searchLocations}
+                    onSelect={(v) => setLocation(v || "")}
+                    placeholder="Type or select location..." />
+                </div>
               </div>
 
               {/* Notes */}

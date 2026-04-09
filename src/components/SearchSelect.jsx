@@ -39,20 +39,20 @@ export default function SearchSelect({ value, displayValue, fetchOptions, static
 
   const doSearch = useCallback((val) => {
     if (timer.current) clearTimeout(timer.current);
-    if (loaded || staticOptions) {
-      const filtered = filterOpts(staticOptions || allOpts, val);
+    if (staticOptions) {
+      const filtered = filterOpts(staticOptions, val);
       setOpts(filtered);
       setOpen(true);
       setHlIdx(-1);
     } else if (fetchOptions) {
       timer.current = setTimeout(() => {
         fetchOptions(val || "").then(r => {
-          setAllOpts(r); setLoaded(true);
+          if (!val) { setAllOpts(r); setLoaded(true); }
           setOpts(r); setOpen(r.length > 0); setHlIdx(-1);
         });
       }, 150);
     }
-  }, [fetchOptions, staticOptions, allOpts, loaded, filterOpts]);
+  }, [fetchOptions, staticOptions, filterOpts]);
 
   const pick = (opt) => { setText(opt.label); setSelectedId(opt.value); setOpen(false); onSelect(opt.value, opt.label); };
   const ic = "w-full px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500";

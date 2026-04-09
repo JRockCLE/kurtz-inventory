@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { qry, lookupBarcode, checkBarcodeInSystem, searchVendors, searchLocations, searchUnits, searchDepts, searchCategories, searchSubCategories, addItemLocation } from "../lib/hooks";
 import { fmt$ } from "../lib/helpers";
 import SearchSelect from "./SearchSelect";
+import { Html5Qrcode } from "html5-qrcode";
 
 // ─── Supplier search ───
 async function searchSuppliers(typed) {
@@ -122,6 +123,21 @@ function LineItem({ item, isDraft, onUpdate, onRemove }) {
 
 export default function ReceivingDoc({ docId, onBack, onUpdate }) {
   const barcodeRef = useRef(null);
+  const [scanning, setScanning] = useState(false);
+  const scannerRef = useRef(null);
+  const scannerDivId = "recv-qr-reader";
+
+  const stopScanner = useCallback(() => {
+    if (scannerRef.current) {
+      scannerRef.current.stop().then(() => {
+        scannerRef.current.clear();
+        scannerRef.current = null;
+      }).catch(() => {});
+    }
+    setScanning(false);
+  }, []);
+
+  useEffect(() => () => { if (scannerRef.current) scannerRef.current.stop().catch(() => {}); }, []);
   const casesRef = useRef(null);
   const ic = "w-full px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500";
   const lc = "block text-xs font-semibold text-stone-500 uppercase tracking-wide mb-1";
@@ -305,6 +321,26 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
       handleBarcodeScan(barcode);
     }
   };
+
+  const startScanner = useCallback(() => {
+    setScanning(true);
+    setTimeout(() => {
+      const html5QrCode = new Html5Qrcode(scannerDivId);
+      scannerRef.current = html5QrCode;
+      html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 280, height: 150 }, aspectRatio: 1.5 },
+        (decodedText) => {
+          stopScanner();
+          setBarcode(decodedText);
+          handleBarcodeScan(decodedText);
+        },
+      ).catch((err) => {
+        console.error("Camera error:", err);
+        setScanning(false);
+      });
+    }, 100);
+  }, [stopScanner]);
 
   // ─── Add item ───
   const addItem = async () => {
@@ -539,13 +575,22 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
           {doc?.status === "draft" && (
             <div className={`bg-white rounded-xl border border-stone-200 p-4 ${statusColor ? statusColor : ""}`}>
               {/* Barcode row */}
-              <div className="flex gap-2 mb-3">
-                <div className="flex-1">
-                  <label className={lc}>Scan Barcode</label>
-                  <input ref={barcodeRef} className={`${ic} text-lg font-mono tracking-wider`}
+              <div className="mb-3">
+                <label className={lc}>Scan Barcode</label>
+                <div className="flex gap-2">
+                  <input ref={barcodeRef} className={`${ic} flex-1 text-lg font-mono tracking-wider`}
                     value={barcode} onChange={handleBarcodeChange} onKeyDown={handleBarcodeKeyDown}
                     placeholder="Scan or type barcode, press Enter..." autoFocus />
+                  <button type="button" onClick={scanning ? stopScanner : startScanner}
+                    className={`px-3 py-2 rounded-lg text-sm font-bold transition-colors whitespace-nowrap ${scanning ? "bg-red-500 text-white hover:bg-red-600" : "bg-stone-200 text-stone-700 hover:bg-stone-300"}`}>
+                    {scanning ? "Stop" : "Camera"}
+                  </button>
                 </div>
+                {scanning && (
+                  <div className="mt-2 rounded-lg overflow-hidden border border-stone-200">
+                    <div id={scannerDivId} />
+                  </div>
+                )}
               </div>
 
               {/* Status indicator */}
