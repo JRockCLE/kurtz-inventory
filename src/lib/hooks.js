@@ -1,7 +1,19 @@
 import { useState, useEffect, useCallback } from "react";
 
-const SB_URL = "https://veqsqzzymxjniagodkey.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZlcXNxenp5bXhqbmlhZ29ka2V5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQ5NDIxOCwiZXhwIjoyMDkxMDcwMjE4fQ.05MhQ5FB1jEV05f435JhTMn61yEWmzPU22add0tBP64";
+export const SB_URL = "https://veqsqzzymxjniagodkey.supabase.co";
+export const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZlcXNxenp5bXhqbmlhZ29ka2V5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQ5NDIxOCwiZXhwIjoyMDkxMDcwMjE4fQ.05MhQ5FB1jEV05f435JhTMn61yEWmzPU22add0tBP64";
+
+export async function uploadPhoto(file, upc) {
+  const ext = file.name?.split(".").pop() || "jpg";
+  const path = `${upc}/${Date.now()}.${ext}`;
+  const res = await fetch(`${SB_URL}/storage/v1/object/product-photos/${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${SB_KEY}`, "Content-Type": file.type || "image/jpeg" },
+    body: file,
+  });
+  if (!res.ok) throw new Error("Upload failed");
+  return `${SB_URL}/storage/v1/object/public/product-photos/${path}`;
+}
 
 const sbH = (schema = "public") => ({
   apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`,
@@ -75,7 +87,7 @@ export async function checkBarcodeInSystem(barcode) {
   if (!barcode || barcode.length < 3) return [];
   try {
     const items = await qry("local_items", {
-      select: "id,name,size,upc,warehouse_location,cases_on_hand,expiration_date,case_size,retail_price,mfg_id,cost,dept_id,category_id,sub_category_id",
+      select: "id,name,size,upc,warehouse_location,cases_on_hand,expiration_date,case_size,retail_price,mfg_id,cost,dept_id,category_id,sub_category_id,photos,default_photo",
       filters: `upc=eq.${encodeURIComponent(barcode)}&active_yn=eq.Y`,
       order: "name.asc",
       limit: 50,

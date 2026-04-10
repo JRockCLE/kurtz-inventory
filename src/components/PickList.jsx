@@ -1,9 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { qry } from "../lib/hooks";
+import { qry, SB_URL, SB_KEY } from "../lib/hooks";
 import { naturalCompare, fmtDate } from "../lib/helpers";
-
-const SB_URL = "https://veqsqzzymxjniagodkey.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZlcXNxenp5bXhqbmlhZ29ka2V5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQ5NDIxOCwiZXhwIjoyMDkxMDcwMjE4fQ.05MhQ5FB1jEV05f435JhTMn61yEWmzPU22add0tBP64";
 
 export default function PickList({ orderId, onBack, onUpdate, data }) {
   const [order, setOrder] = useState(null);

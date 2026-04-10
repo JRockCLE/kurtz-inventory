@@ -1,22 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { qry, checkBarcodeInSystem, lookupBarcode, addItemLocation, searchLocations } from "../lib/hooks";
+import { qry, checkBarcodeInSystem, lookupBarcode, addItemLocation, searchLocations, uploadPhoto } from "../lib/hooks";
 import SearchSelect from "./SearchSelect";
 import { Html5Qrcode } from "html5-qrcode";
-
-const SB_URL = "https://veqsqzzymxjniagodkey.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZlcXNxenp5bXhqbmlhZ29ka2V5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQ5NDIxOCwiZXhwIjoyMDkxMDcwMjE4fQ.05MhQ5FB1jEV05f435JhTMn61yEWmzPU22add0tBP64";
-
-async function uploadPhoto(file, upc) {
-  const ext = file.name?.split(".").pop() || "jpg";
-  const path = `${upc}/${Date.now()}.${ext}`;
-  const res = await fetch(`${SB_URL}/storage/v1/object/product-photos/${path}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${SB_KEY}`, "Content-Type": file.type || "image/jpeg" },
-    body: file,
-  });
-  if (!res.ok) throw new Error("Upload failed");
-  return `${SB_URL}/storage/v1/object/public/product-photos/${path}`;
-}
 
 export default function QuickAdd() {
   const barcodeRef = useRef(null);
@@ -121,6 +106,26 @@ export default function QuickAdd() {
       const itemUpdate = {};
       if (isFirst) itemUpdate.warehouse_location = location;
       if (expDate) itemUpdate.expiration_date = expDate;
+
+      // Upload and save photos
+      if (photos.length > 0) {
+        const photoUrls = [];
+        for (const p of photos) {
+          const url = await uploadPhoto(p.file, status.upc);
+          photoUrls.push(url);
+        }
+        // Merge with any existing photos
+        try {
+          const [existing] = await qry("local_items", { select: "photos", filters: `id=eq.${itemId}`, limit: 1 });
+          const prev = existing?.photos || [];
+          itemUpdate.photos = [...prev, ...photoUrls];
+          if (!existing?.default_photo) itemUpdate.default_photo = photoUrls[0];
+        } catch {
+          itemUpdate.photos = photoUrls;
+          itemUpdate.default_photo = photoUrls[0];
+        }
+      }
+
       if (Object.keys(itemUpdate).length) {
         await qry("local_items", { update: itemUpdate, match: { id: itemId } });
       }
@@ -269,6 +274,27 @@ export default function QuickAdd() {
                   </div>
                 </div>
               </div>
+              {/* Photos */}
+              <div>
+                <label className={lc}>Product Photos</label>
+                <div className="flex gap-2 flex-wrap">
+                  {photos.map((p, i) => (
+                    <div key={i} className="relative w-16 h-16 rounded-lg overflow-hidden border border-stone-200">
+                      <img src={p.preview} alt="" className="w-full h-full object-cover" />
+                      <button onClick={() => removePhoto(i)}
+                        className="absolute top-0.5 right-0.5 w-4 h-4 bg-black/60 text-white rounded-full text-[10px] flex items-center justify-center hover:bg-red-600">
+                        x
+                      </button>
+                    </div>
+                  ))}
+                  <button onClick={() => photoInputRef.current?.click()}
+                    className="w-16 h-16 rounded-lg border-2 border-dashed border-stone-300 flex flex-col items-center justify-center text-stone-400 hover:border-stone-400 hover:text-stone-500 transition-colors">
+                    <span className="text-xl leading-none">+</span>
+                    <span className="text-[9px] mt-0.5">Photo</span>
+                  </button>
+                </div>
+              </div>
+
               <div className="flex gap-2">
                 <button onClick={assignLocation} disabled={saving || !location}
                   className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">

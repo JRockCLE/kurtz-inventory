@@ -1,9 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations } from "../lib/hooks";
+import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, uploadPhoto, SB_URL, SB_KEY } from "../lib/hooks";
 import SearchSelect from "./SearchSelect";
-
-const SB_URL = "https://veqsqzzymxjniagodkey.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZlcXNxenp5bXhqbmlhZ29ka2V5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQ5NDIxOCwiZXhwIjoyMDkxMDcwMjE4fQ.05MhQ5FB1jEV05f435JhTMn61yEWmzPU22add0tBP64";
 const sbH = (schema = "posbe") => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Accept-Profile": schema, "Content-Profile": schema, "Content-Type": "application/json" });
 
 async function checkUpcExists(upc) {
@@ -129,6 +126,32 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
     notes: normalized.notes || "",
   });
 
+  // Photos
+  const [photos, setPhotos] = useState(item?.photos || []);
+  const [defaultPhoto, setDefaultPhoto] = useState(item?.default_photo || null);
+  const [newPhotos, setNewPhotos] = useState([]); // [{ file, preview }]
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const photoInputRef2 = useRef(null);
+
+  const handlePhotoUpload = (e) => {
+    const files = Array.from(e.target.files || []);
+    const added = files.map(f => ({ file: f, preview: URL.createObjectURL(f) }));
+    setNewPhotos(prev => [...prev, ...added]);
+    e.target.value = "";
+  };
+
+  const removeExistingPhoto = (url) => {
+    setPhotos(prev => prev.filter(u => u !== url));
+    if (defaultPhoto === url) setDefaultPhoto(photos.find(u => u !== url) || null);
+  };
+
+  const removeNewPhoto = (idx) => {
+    setNewPhotos(prev => {
+      URL.revokeObjectURL(prev[idx].preview);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
   const [saving, setSaving] = useState(false);
   const [upcChecking, setUpcChecking] = useState(false);
   const [upcMatch, setUpcMatch] = useState(null);
@@ -188,6 +211,16 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
     if (!canSave) return;
     setSaving(true);
     try {
+      // Upload any new photos
+      let allPhotos = [...photos];
+      if (newPhotos.length > 0) {
+        for (const p of newPhotos) {
+          const url = await uploadPhoto(p.file, f.upc.trim());
+          allPhotos.push(url);
+        }
+      }
+      const defPhoto = defaultPhoto && allPhotos.includes(defaultPhoto) ? defaultPhoto : (allPhotos[0] || null);
+
       const payload = {
         upc: f.upc.trim(),
         mfg_id: f.mfg_id ? parseInt(f.mfg_id) : null,
@@ -205,6 +238,8 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
         warehouse_location: f.warehouse_location.trim() || null,
         store_location: f.store_location.trim() || null,
         notes: f.notes.trim() || null,
+        photos: allPhotos,
+        default_photo: defPhoto,
         updated_at: new Date().toISOString(),
       };
       if (isEdit && normalized.localId) {
@@ -250,6 +285,45 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
               </div>
             )}
             {upcChecked && !upcMatch && f.upc.length >= 6 && <div className="mt-1 text-xs text-green-600 font-medium">Barcode is available</div>}
+          </div>
+
+          {/* ─── PHOTOS ─── */}
+          <div className="border-t border-stone-200 pt-4 pb-4">
+            <div className="text-[10px] font-bold text-white uppercase tracking-wider mb-3 bg-stone-600 -mx-5 px-5 py-1.5">Product Photos</div>
+            <div className="flex gap-2 flex-wrap">
+              {photos.map((url, i) => (
+                <div key={url} className={`relative w-20 h-20 rounded-lg overflow-hidden border-2 cursor-pointer transition-colors ${defaultPhoto === url ? "border-amber-500" : "border-stone-200 hover:border-stone-300"}`}
+                  onClick={() => setDefaultPhoto(url)} title={defaultPhoto === url ? "Default photo" : "Click to set as default"}>
+                  <img src={url} alt="" className="w-full h-full object-cover" />
+                  {defaultPhoto === url && (
+                    <div className="absolute bottom-0 inset-x-0 bg-amber-500 text-white text-[9px] text-center font-bold py-0.5">DEFAULT</div>
+                  )}
+                  <button onClick={e => { e.stopPropagation(); removeExistingPhoto(url); }}
+                    className="absolute top-0.5 right-0.5 w-5 h-5 bg-black/60 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600">
+                    x
+                  </button>
+                </div>
+              ))}
+              {newPhotos.map((p, i) => (
+                <div key={i} className="relative w-20 h-20 rounded-lg overflow-hidden border-2 border-blue-300">
+                  <img src={p.preview} alt="" className="w-full h-full object-cover" />
+                  <div className="absolute bottom-0 inset-x-0 bg-blue-500 text-white text-[9px] text-center font-bold py-0.5">NEW</div>
+                  <button onClick={() => removeNewPhoto(i)}
+                    className="absolute top-0.5 right-0.5 w-5 h-5 bg-black/60 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600">
+                    x
+                  </button>
+                </div>
+              ))}
+              <button onClick={() => photoInputRef2.current?.click()}
+                className="w-20 h-20 rounded-lg border-2 border-dashed border-stone-300 flex flex-col items-center justify-center text-stone-400 hover:border-amber-400 hover:text-amber-500 transition-colors">
+                <span className="text-2xl leading-none">+</span>
+                <span className="text-[10px] mt-0.5">Photo</span>
+              </button>
+            </div>
+            <input ref={photoInputRef2} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={handlePhotoUpload} />
+            {photos.length === 0 && newPhotos.length === 0 && (
+              <p className="text-xs text-stone-400 mt-2">No photos yet. Click + to add.</p>
+            )}
           </div>
 
           {/* ─── PRODUCT INFO ─── */}

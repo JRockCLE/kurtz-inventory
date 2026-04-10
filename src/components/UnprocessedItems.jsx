@@ -79,6 +79,8 @@ export default function UnprocessedItems() {
       // Create the local item
       const unitCost = f.case_cost && f.case_size
         ? parseFloat((parseFloat(f.case_cost) / parseInt(f.case_size)).toFixed(2)) : null;
+      // Copy photos from unprocessed item
+      const itemPhotos = current.photos || [];
       const [newItem] = await qry("local_items", {
         insert: {
           upc: current.upc,
@@ -95,6 +97,8 @@ export default function UnprocessedItems() {
           expiration_date: f.expiration_date || null,
           warehouse_location: f.warehouse_location.trim() || null,
           notes: f.notes.trim() || null,
+          photos: itemPhotos,
+          default_photo: itemPhotos[0] || null,
           sync_status: "local",
           created_by: "Unprocessed",
           active_yn: "Y",
