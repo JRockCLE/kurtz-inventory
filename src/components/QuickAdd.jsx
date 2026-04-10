@@ -13,6 +13,7 @@ export default function QuickAdd() {
   const [saving, setSaving] = useState(false);
   const [log, setLog] = useState([]);
   const [scanning, setScanning] = useState(false);
+  const [torch, setTorch] = useState(false);
   const scannerRef = useRef(null);
   const scannerDivId = "qr-reader";
 
@@ -25,6 +26,23 @@ export default function QuickAdd() {
   const ic = "w-full px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500";
   const lc = "block text-xs font-semibold text-stone-500 uppercase tracking-wide mb-1";
 
+  const toggleTorch = useCallback(async (on) => {
+    try {
+      const scanner = scannerRef.current;
+      if (!scanner) return;
+      const state = scanner.getState?.();
+      // html5-qrcode exposes the video track via internal state
+      const video = document.querySelector(`#${scannerDivId} video`);
+      if (video?.srcObject) {
+        const track = video.srcObject.getVideoTracks()[0];
+        if (track) {
+          await track.applyConstraints({ advanced: [{ torch: on }] });
+          setTorch(on);
+        }
+      }
+    } catch { /* torch not supported */ }
+  }, []);
+
   const stopScanner = useCallback(() => {
     if (scannerRef.current) {
       scannerRef.current.stop().then(() => {
@@ -33,6 +51,7 @@ export default function QuickAdd() {
       }).catch(() => {});
     }
     setScanning(false);
+    setTorch(false);
   }, []);
 
   useEffect(() => () => { if (scannerRef.current) scannerRef.current.stop().catch(() => {}); }, []);
@@ -239,11 +258,21 @@ export default function QuickAdd() {
               </button>
             </div>
             {scanning && (
-              <div className="mt-2 rounded-lg overflow-hidden border border-stone-200">
-                <div id={scannerDivId} />
+              <div className="mt-2">
+                <div className="rounded-lg overflow-hidden border border-stone-200">
+                  <div id={scannerDivId} />
+                </div>
+                <button onClick={() => toggleTorch(!torch)}
+                  className={`mt-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-colors ${torch ? "bg-yellow-400 text-yellow-900" : "bg-stone-200 text-stone-600 hover:bg-stone-300"}`}>
+                  {torch ? "Flash ON" : "Flash OFF"}
+                </button>
               </div>
             )}
           </div>
+
+          {/* Hidden file input for photos (shared by found/created and notfound flows) */}
+          <input ref={photoInputRef} type="file" accept="image/*" capture="environment" multiple
+            className="hidden" onChange={handlePhotoCapture} />
 
           {/* ─── STATUS ─── */}
           {status && (
@@ -330,8 +359,6 @@ export default function QuickAdd() {
                     <span className="text-[10px] mt-0.5">Photo</span>
                   </button>
                 </div>
-                <input ref={photoInputRef} type="file" accept="image/*" capture="environment" multiple
-                  className="hidden" onChange={handlePhotoCapture} />
               </div>
 
               {/* Exp Date + Location */}
