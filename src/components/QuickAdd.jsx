@@ -172,7 +172,7 @@ export default function QuickAdd() {
         insert: {
           upc: status.upc,
           warehouse_location: location || null,
-          expiration_date: expDate || null,
+          expiration_date: expDate && expDate.trim() ? expDate : null,
           photos: photoUrls,
           notes: notes.trim() || null,
         },

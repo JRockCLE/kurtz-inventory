@@ -64,7 +64,15 @@ export default function SearchSelect({ value, displayValue, fetchOptions, static
         onKeyDown={e => {
           if (e.key === "ArrowDown") { e.preventDefault(); setHlIdx(p => Math.min(p + 1, opts.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setHlIdx(p => Math.max(p - 1, -1)); }
-          else if (e.key === "Enter") { e.preventDefault(); if (hlIdx >= 0 && opts[hlIdx]) pick(opts[hlIdx]); else if (opts.length === 1) pick(opts[0]); }
+          else if (e.key === "Enter") {
+            e.preventDefault();
+            if (hlIdx >= 0 && opts[hlIdx]) pick(opts[hlIdx]);
+            else if (opts.length === 1) pick(opts[0]);
+            else if (text && fetchOptions) {
+              // Force immediate search and pick if single result
+              fetchOptions(text).then(r => { if (r.length === 1) pick(r[0]); });
+            }
+          }
           else if (e.key === "Escape") setOpen(false);
         }}
         onFocus={() => showList(selectedId ? "" : text)}
