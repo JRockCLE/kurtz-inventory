@@ -57,6 +57,7 @@ export default function UnprocessedItems() {
       ...emptyForm(),
       warehouse_location: item?.warehouse_location || "",
       expiration_date: item?.expiration_date ? new Date(item.expiration_date).toISOString().slice(0, 10) : "",
+      case_size: item?.case_size || "",
       notes: item?.notes || "",
     });
   };
@@ -206,6 +207,12 @@ export default function UnprocessedItems() {
                   <span className="text-stone-500">Location</span>
                   <span className="font-bold text-amber-700">{current.warehouse_location || "—"}</span>
                 </div>
+                {current.case_size && (
+                  <div className="flex justify-between">
+                    <span className="text-stone-500">Units/Case</span>
+                    <span className="text-stone-700">{current.case_size}</span>
+                  </div>
+                )}
                 {current.expiration_date && (
                   <div className="flex justify-between">
                     <span className="text-stone-500">Exp Date</span>

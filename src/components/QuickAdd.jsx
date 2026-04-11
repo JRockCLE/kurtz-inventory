@@ -18,6 +18,7 @@ export default function QuickAdd() {
   const scannerDivId = "qr-reader";
 
   const [expDate, setExpDate] = useState("");
+  const [caseSize, setCaseSize] = useState("");
 
   // Photo state for unprocessed items
   const [photos, setPhotos] = useState([]); // [{ file, preview }]
@@ -60,6 +61,7 @@ export default function QuickAdd() {
     setBarcode("");
     setLocation("");
     setExpDate("");
+    setCaseSize("");
     setStatus(null);
     setPhotos([]);
     setNotes("");
@@ -125,6 +127,7 @@ export default function QuickAdd() {
       const itemUpdate = {};
       if (isFirst) itemUpdate.warehouse_location = location;
       if (expDate) itemUpdate.expiration_date = expDate;
+      if (caseSize) itemUpdate.case_size = parseInt(caseSize);
 
       // Upload and save photos
       if (photos.length > 0) {
@@ -173,6 +176,7 @@ export default function QuickAdd() {
           upc: status.upc,
           warehouse_location: location || null,
           expiration_date: expDate && expDate.trim() ? expDate : null,
+          case_size: caseSize ? parseInt(caseSize) : null,
           photos: photoUrls,
           notes: notes.trim() || null,
         },
@@ -288,7 +292,11 @@ export default function QuickAdd() {
           {/* ─── FOUND / CREATED: assign location ─── */}
           {status && (status.type === "found" || status.type === "created") && (
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className={lc}>Units / Case</label>
+                  <input type="number" className={ic} value={caseSize} onChange={e => setCaseSize(e.target.value)} placeholder="e.g., 12" />
+                </div>
                 <div>
                   <label className={lc}>Expiration Date</label>
                   <input type="date" className={ic} value={expDate} onChange={e => setExpDate(e.target.value)} />
@@ -361,8 +369,12 @@ export default function QuickAdd() {
                 </div>
               </div>
 
-              {/* Exp Date + Location */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Units/Case + Exp Date + Location */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className={lc}>Units / Case</label>
+                  <input type="number" className={ic} value={caseSize} onChange={e => setCaseSize(e.target.value)} placeholder="e.g., 12" />
+                </div>
                 <div>
                   <label className={lc}>Expiration Date</label>
                   <input type="date" className={ic} value={expDate} onChange={e => setExpDate(e.target.value)} />
