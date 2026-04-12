@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
-import { useLocalItems, qry } from "../lib/hooks";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { useLocalItems, qry, fetchItemsForNeeds } from "../lib/hooks";
 import { fmt$, fmtDate, naturalCompare } from "../lib/helpers";
 
 // Measure text width using an offscreen canvas
@@ -20,6 +20,9 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
   const [page, setPage] = useState(0);
   const [localTick, setLocalTick] = useState(0);
   const [locMap, setLocMap] = useState({}); // { itemId: [{ location, is_primary }] }
+  const [showPrintMenu, setShowPrintMenu] = useState(false);
+  const [printItems, setPrintItems] = useState(null); // { items, sortLabel }
+  const [printLoading, setPrintLoading] = useState(false);
 
   const handleSearch = (val) => {
     setSearchInput(val);
@@ -27,16 +30,9 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
     setSearchTimer(setTimeout(() => { setSearch(val); setPage(0); }, 300));
   };
 
-  const { items: rawItems, total, loading, pageSize } = useLocalItems({
+  const { items, total, loading, pageSize } = useLocalItems({
     search, sortBy, sortDir, page, refreshTick: refreshTick + localTick,
   });
-
-  // Client-side natural sort for warehouse_location (server can't do natural sort)
-  const items = useMemo(() => {
-    if (sortBy !== "warehouse_location") return rawItems;
-    const sorted = [...rawItems].sort((a, b) => naturalCompare(a.warehouse_location, b.warehouse_location));
-    return sortDir === "desc" ? sorted.reverse() : sorted;
-  }, [rawItems, sortBy, sortDir]);
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -72,6 +68,60 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
     setLocalTick(t => t + 1);
   };
 
+  const deptMap = Object.fromEntries((data.depts || []).map(d => [d.Dept_ID, d.Name_TX]));
+  const catMap = Object.fromEntries((data.categories || []).map(c => [c.Category_ID, c.Name_TX]));
+  const unitMap = Object.fromEntries((data.units || []).map(u => [String(u.Unit_ID), u.Unit_Name_TX]));
+
+  const preparePrint = useCallback(async (sortOption) => {
+    setPrintLoading(true);
+    setShowPrintMenu(false);
+    try {
+      const allItems = await fetchItemsForNeeds();
+
+      // Sort based on option
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+      switch (sortOption) {
+        case "dept":
+          allItems.sort((a, b) => {
+            const da = (a.dept_id ? deptMap[a.dept_id] : null) || "zzz";
+            const db = (b.dept_id ? deptMap[b.dept_id] : null) || "zzz";
+            return da.localeCompare(db)
+              || (a._mfg_name || "zzz").localeCompare(b._mfg_name || "zzz")
+              || (a.name || "").localeCompare(b.name || "");
+          });
+          break;
+        case "mfg":
+          allItems.sort((a, b) => {
+            const ma = (a._mfg_name || "zzz").toLowerCase();
+            const mb = (b._mfg_name || "zzz").toLowerCase();
+            return ma.localeCompare(mb) || (a.name || "").localeCompare(b.name || "");
+          });
+          break;
+        case "wh_loc":
+          allItems.sort((a, b) => {
+            if (!a.warehouse_location && !b.warehouse_location) return 0;
+            if (!a.warehouse_location) return 1;
+            if (!b.warehouse_location) return -1;
+            return collator.compare(a.warehouse_location, b.warehouse_location) || (a.name || "").localeCompare(b.name || "");
+          });
+          break;
+        case "store_loc":
+          allItems.sort((a, b) => {
+            if (!a.store_location && !b.store_location) return 0;
+            if (!a.store_location) return 1;
+            if (!b.store_location) return -1;
+            return collator.compare(a.store_location, b.store_location) || (a.name || "").localeCompare(b.name || "");
+          });
+          break;
+      }
+
+      const labels = { dept: "Department", mfg: "Manufacturer", wh_loc: "Warehouse Location", store_loc: "Store Location" };
+      setPrintItems({ items: allItems, sortOption, sortLabel: labels[sortOption] });
+      setTimeout(() => { window.print(); }, 300);
+    } catch (err) { alert("Error loading items: " + err.message); }
+    setPrintLoading(false);
+  }, [deptMap]);
+
   const [whLocDetails, setWhLocDetails] = useState({}); // { label: { section, aisle } }
 
   // Load warehouse location details (section/aisle) once
@@ -105,19 +155,43 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
     }).catch(() => setLocMap({}));
   }, [items]);
 
-  const deptMap = Object.fromEntries((data.depts || []).map(d => [d.Dept_ID, d.Name_TX]));
-  const catMap = Object.fromEntries((data.categories || []).map(c => [c.Category_ID, c.Name_TX]));
   const vendorMap = Object.fromEntries((data.vendors || []).map(v => [v.Vendor_ID, v.Vendor_Name_TX]));
-  const unitMap = Object.fromEntries((data.units || []).map(u => [u.Unit_ID, u.Unit_Name_TX]));
 
   return (
     <div className="flex flex-col h-full">
-      <div className="bg-white border-b border-stone-200 px-4 py-3">
+      <div className="bg-white border-b border-stone-200 px-4 py-3 print:hidden">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg font-bold text-stone-800">Warehouse Items</h2>
-          <span className="text-xs text-stone-400">
-            {total.toLocaleString()} items{totalPages > 1 && ` • Page ${page + 1} of ${totalPages.toLocaleString()}`}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-stone-400">
+              {total.toLocaleString()} items{totalPages > 1 && ` • Page ${page + 1} of ${totalPages.toLocaleString()}`}
+            </span>
+            <div className="relative">
+              <button onClick={() => setShowPrintMenu(!showPrintMenu)} disabled={printLoading}
+                className="px-3 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-sm hover:bg-stone-200 disabled:opacity-50">
+                {printLoading ? "Loading..." : "Print Item List"}
+              </button>
+              {showPrintMenu && (
+                <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowPrintMenu(false)} />
+                <div className="absolute right-0 top-full mt-1 bg-white border border-stone-200 rounded-lg shadow-lg z-50 py-1 min-w-[200px]">
+                  <div className="px-3 py-1.5 text-[10px] font-bold text-stone-400 uppercase">Sort by...</div>
+                  {[
+                    { id: "dept", label: "Department" },
+                    { id: "mfg", label: "Manufacturer (A-Z)" },
+                    { id: "wh_loc", label: "Warehouse Location" },
+                    { id: "store_loc", label: "Store Location" },
+                  ].map(opt => (
+                    <button key={opt.id} onClick={() => preparePrint(opt.id)}
+                      className="w-full text-left px-3 py-2 text-sm text-stone-700 hover:bg-amber-50 hover:text-amber-800">
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
         <div className="relative max-w-md">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">🔍</span>
@@ -127,7 +201,7 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto print:hidden">
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 z-10">
             <tr className="bg-stone-700 text-white text-[10px] font-bold uppercase tracking-wider">
@@ -220,7 +294,7 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
       </div>
 
       {totalPages > 1 && (
-        <div className="bg-white border-t border-stone-200 px-4 py-2 flex items-center justify-between">
+        <div className="bg-white border-t border-stone-200 px-4 py-2 flex items-center justify-between print:hidden">
           <div className="flex items-center gap-1">
             <button onClick={() => setPage(0)} disabled={page === 0} className="px-2 py-1.5 text-sm rounded-lg border border-stone-300 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed">⟨⟨ First</button>
             <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} className="px-3 py-1.5 text-sm rounded-lg border border-stone-300 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed">← Prev</button>
@@ -235,6 +309,83 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
             <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} className="px-3 py-1.5 text-sm rounded-lg border border-stone-300 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed">Next →</button>
             <button onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1} className="px-2 py-1.5 text-sm rounded-lg border border-stone-300 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed">Last ⟩⟩</button>
           </div>
+        </div>
+      )}
+
+      {/* ─── Print-only item list ─── */}
+      {printItems && (
+        <div className="hidden print:block">
+          <div className="px-6 pt-6 pb-2">
+            <div className="flex justify-between items-end border-b-2 border-stone-800 pb-2 mb-1">
+              <div>
+                <h1 className="text-xl font-black">KURTZ DISCOUNT GROCERIES</h1>
+                <p className="text-sm font-bold">ITEM LIST — Sorted by {printItems.sortLabel}</p>
+              </div>
+              <div className="text-right text-sm">
+                <p className="font-bold">{new Date().toLocaleDateString()}</p>
+                <p className="text-xs text-stone-500">{printItems.items.length} items</p>
+              </div>
+            </div>
+          </div>
+          <table className="w-full text-xs border-collapse">
+            <thead style={{ display: "table-header-group" }}>
+              <tr className="border-b-2 border-stone-400 text-[10px] font-bold text-stone-600 uppercase">
+                {printItems.sortOption === "wh_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">WH Loc</th>}
+                {printItems.sortOption === "store_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">Store Loc</th>}
+                <th className="px-2 py-1.5 text-left">Mfg</th>
+                <th className="px-2 py-1.5 text-left">Description</th>
+                <th className="px-2 py-1.5 text-center whitespace-nowrap">Size/Unit</th>
+                <th className="px-2 py-1.5 text-center whitespace-nowrap">U/Case</th>
+                <th className="px-2 py-1.5 text-center whitespace-nowrap">Price</th>
+                <th className="px-2 py-1.5 text-center whitespace-nowrap">Cases</th>
+                {printItems.sortOption !== "wh_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">WH Loc</th>}
+                {printItems.sortOption !== "store_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">Store Loc</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {(() => {
+                let lastGroup = null;
+                const useGroups = printItems.sortOption === "dept" || printItems.sortOption === "mfg";
+                return printItems.items.map((item, ii) => {
+                  const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
+                  let groupHeader = null;
+
+                  if (useGroups) {
+                    const currentGroup = printItems.sortOption === "dept"
+                      ? ((item.dept_id ? deptMap[item.dept_id] : null) || "Other")
+                      : (item._mfg_name || "Unknown");
+
+                    if (currentGroup !== lastGroup) {
+                      lastGroup = currentGroup;
+                      groupHeader = (
+                        <tr key={`g-${ii}`}>
+                          <td colSpan={9} className="pt-3 pb-1 px-2 font-bold text-xs uppercase text-stone-800 border-b border-stone-300">
+                            {currentGroup}
+                          </td>
+                        </tr>
+                      );
+                    }
+                  }
+
+                  return [
+                    groupHeader,
+                    <tr key={`r-${item.id}`} className={ii % 2 ? "bg-stone-50" : ""}>
+                      {printItems.sortOption === "wh_loc" && <td className="px-2 py-1 text-stone-800 font-bold border-b border-stone-100 whitespace-nowrap">{item.warehouse_location || "—"}</td>}
+                      {printItems.sortOption === "store_loc" && <td className="px-2 py-1 text-stone-800 font-bold border-b border-stone-100 whitespace-nowrap">{item.store_location || "—"}</td>}
+                      <td className="px-2 py-1 text-stone-500 border-b border-stone-100">{item._mfg_name || "—"}</td>
+                      <td className="px-2 py-1 font-medium text-stone-800 border-b border-stone-100">{item.name}</td>
+                      <td className="px-2 py-1 text-center text-stone-500 border-b border-stone-100 whitespace-nowrap">{sizeUnit || "—"}</td>
+                      <td className="px-2 py-1 text-center text-stone-500 border-b border-stone-100">{item.case_size || "—"}</td>
+                      <td className="px-2 py-1 text-center text-stone-600 border-b border-stone-100">{item.retail_price ? fmt$(item.retail_price) : "—"}</td>
+                      <td className="px-2 py-1 text-center font-bold text-stone-700 border-b border-stone-100">{item.cases_on_hand || "—"}</td>
+                      {printItems.sortOption !== "wh_loc" && <td className="px-2 py-1 text-amber-700 font-medium border-b border-stone-100 whitespace-nowrap">{item.warehouse_location || "—"}</td>}
+                      {printItems.sortOption !== "store_loc" && <td className="px-2 py-1 text-stone-500 border-b border-stone-100 whitespace-nowrap">{item.store_location || "—"}</td>}
+                    </tr>,
+                  ];
+                });
+              })()}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

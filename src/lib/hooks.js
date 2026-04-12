@@ -211,16 +211,38 @@ export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", p
     if (cf.warehouse_location) filters.push(`warehouse_location=ilike.*${cf.warehouse_location}*`);
 
     const filterStr = filters.join("&");
-    const order = `${sortBy}.${sortDir}.nullslast`;
+    const needsNaturalSort = sortBy === "warehouse_location";
+    const order = needsNaturalSort ? "name.asc" : `${sortBy}.${sortDir}.nullslast`;
     const offset = page * PAGE_SIZE;
 
+    // For warehouse_location sort, fetch all items so we can natural-sort across pages
+    const fetchHeaders = { ...sbH("public"), Prefer: "count=exact" };
+    if (!needsNaturalSort) fetchHeaders.Range = `${offset}-${offset + PAGE_SIZE - 1}`;
+
     fetch(`${SB_URL}/rest/v1/local_items?${filterStr}&order=${order}`, {
-      headers: { ...sbH("public"), Prefer: "count=exact", Range: `${offset}-${offset + PAGE_SIZE - 1}` },
+      headers: fetchHeaders,
     }).then(async res => {
       const range = res.headers.get("content-range");
       if (range) { const t = parseInt(range.split("/")[1]); if (!isNaN(t)) setTotal(t); }
-      const data = await res.json();
-      const list = Array.isArray(data) ? data : [];
+      let data = await res.json();
+      if (!Array.isArray(data)) data = [];
+
+      // Natural sort + client-side pagination for warehouse_location
+      if (needsNaturalSort) {
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+        data.sort((a, b) => {
+          const av = a.warehouse_location, bv = b.warehouse_location;
+          if (av == null && bv == null) return 0;
+          if (av == null) return 1;
+          if (bv == null) return -1;
+          return collator.compare(String(av), String(bv));
+        });
+        if (sortDir === "desc") data.reverse();
+        setTotal(data.length);
+        data = data.slice(offset, offset + PAGE_SIZE);
+      }
+
+      const list = data;
 
       // Resolve mfg names for this page of items
       const mfgIds = [...new Set(list.map(i => i.mfg_id).filter(Boolean))];

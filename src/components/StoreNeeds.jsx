@@ -65,20 +65,15 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
     const g = {};
     allItems.forEach(item => {
       const dk = (item.dept_id ? deptMap[item.dept_id] : null) || "Other";
-      const deptId = item.dept_id;
-      if (!g[dk]) g[dk] = { dept: dk, deptId, categories: {} };
-      const ck = (item.category_id ? catMap[item.category_id] : null) || "Uncategorized";
-      if (!g[dk].categories[ck]) g[dk].categories[ck] = [];
-      g[dk].categories[ck].push(item);
+      if (!g[dk]) g[dk] = { dept: dk, items: [] };
+      g[dk].items.push(item);
     });
-    // Natural-sort items within each category by warehouse location
+    // Sort items within each department: by Mfg then Description
     Object.values(g).forEach(grp => {
-      Object.keys(grp.categories).forEach(ck => {
-        grp.categories[ck].sort((a, b) =>
-          naturalCompare(a.warehouse_location, b.warehouse_location) ||
-          (a.name || "").localeCompare(b.name || "")
-        );
-      });
+      grp.items.sort((a, b) =>
+        (a._mfg_name || "zzz").localeCompare(b._mfg_name || "zzz") ||
+        (a.name || "").localeCompare(b.name || "")
+      );
     });
     return Object.values(g).sort((a, b) => a.dept.localeCompare(b.dept));
   }, [allItems, deptMap, catMap]);
@@ -167,7 +162,7 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
         await qry("store_order_items", { insert: oi });
       }
 
-      if (status === "pending") {
+      if (status === "submitted") {
         setQuantities({});
         setItemNotes({});
         onDone?.();
@@ -207,9 +202,9 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
             <>
               <button onClick={() => saveOrder("draft")} disabled={submitting}
                 className="px-4 py-1.5 bg-stone-200 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-300 disabled:opacity-50">
-                {submitting ? "..." : "Save Draft"}
+                {submitting ? "..." : "Save"}
               </button>
-              <button onClick={() => saveOrder("pending")} disabled={totalItems === 0 || submitting}
+              <button onClick={() => saveOrder("submitted")} disabled={totalItems === 0 || submitting}
                 className={`px-4 py-1.5 rounded-lg text-sm font-bold ${totalItems > 0 ? "bg-green-600 text-white hover:bg-green-700" : "bg-stone-200 text-stone-400 cursor-not-allowed"}`}>
                 Submit List ({totalCases} cs)
               </button>
@@ -252,32 +247,28 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
               </tr>
             </thead>
             <tbody>
-              {grouped.map((group, gi) =>
-                Object.entries(group.categories).sort(([a], [b]) => a.localeCompare(b)).map(([catName, catItems], ci) => [
-                  <tr key={`h-${gi}-${ci}`}>
-                    <td colSpan={7} className="pt-3 pb-1 px-2 font-bold text-xs uppercase text-stone-800 border-b border-stone-300">
-                      <span className="text-stone-600">{group.dept}</span>
-                      <span className="text-stone-400 mx-1">›</span>
-                      <span>{catName}</span>
-                      <span className="text-stone-400 ml-2 font-normal">{catItems.length}</span>
-                    </td>
-                  </tr>,
-                  ...catItems.map((item, ii) => {
-                    const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
-                    return (
-                      <tr key={`r-${item.id}`} className={ii % 2 ? "bg-stone-50" : ""}>
-                        <td className="px-2 py-1.5 text-stone-500 border-b border-stone-200 whitespace-nowrap">{item._mfg_name || "—"}</td>
-                        <td className="px-2 py-1.5 font-medium text-stone-800 border-b border-stone-200">{item.name}</td>
-                        <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{sizeUnit || "—"}</td>
-                        <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{item.case_size || "—"}</td>
-                        <td className="px-2 py-1.5 text-center text-stone-700 font-bold border-b border-stone-200 whitespace-nowrap">{item.warehouse_location || "—"}</td>
-                        <td className="px-1 py-1 text-center border border-stone-300" style={{ height: "32px" }}></td>
-                        <td className="px-2 py-1 border border-stone-300 text-xs text-stone-700">{itemNotes[String(item.id)] || ""}</td>
-                      </tr>
-                    );
-                  }),
-                ])
-              )}
+              {grouped.map((group, gi) => [
+                <tr key={`h-${gi}`}>
+                  <td colSpan={7} className="pt-3 pb-1 px-2 font-bold text-xs uppercase text-stone-800 border-b border-stone-300">
+                    {group.dept}
+                    <span className="text-stone-400 ml-2 font-normal">{group.items.length}</span>
+                  </td>
+                </tr>,
+                ...group.items.map((item, ii) => {
+                  const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
+                  return (
+                    <tr key={`r-${item.id}`} className={ii % 2 ? "bg-stone-50" : ""}>
+                      <td className="px-2 py-1.5 text-stone-500 border-b border-stone-200 whitespace-nowrap">{item._mfg_name || "—"}</td>
+                      <td className="px-2 py-1.5 font-medium text-stone-800 border-b border-stone-200">{item.name}</td>
+                      <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{sizeUnit || "—"}</td>
+                      <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{item.case_size || "—"}</td>
+                      <td className="px-2 py-1.5 text-center text-stone-700 font-bold border-b border-stone-200 whitespace-nowrap">{item.warehouse_location || "—"}</td>
+                      <td className="px-1 py-1 text-center border border-stone-300" style={{ height: "32px" }}></td>
+                      <td className="px-2 py-1 border border-stone-300 text-xs text-stone-700">{itemNotes[String(item.id)] || ""}</td>
+                    </tr>
+                  );
+                }),
+              ])}
             </tbody>
           </table>
 
@@ -285,67 +276,61 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
           <div className="print:hidden">
           {grouped.map((group, gi) => (
             <div key={gi}>
-              {Object.entries(group.categories).sort(([a], [b]) => a.localeCompare(b)).map(([catName, catItems], ci) => (
-                <div key={ci}>
-                  <div className="bg-stone-800 text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider sticky top-0 z-10 flex gap-2">
-                    <span className="text-amber-400">{group.dept}</span>
-                    <span className="text-stone-400">›</span>
-                    <span>{catName}</span>
-                    <span className="text-stone-400 ml-auto">{catItems.length}</span>
-                  </div>
+              <div className="bg-stone-800 text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider sticky top-0 z-10 flex gap-2">
+                <span className="text-amber-400">{group.dept}</span>
+                <span className="text-stone-400 ml-auto">{group.items.length}</span>
+              </div>
 
-                  <div className="grid border-b border-stone-300 bg-stone-100 text-[10px] font-bold text-stone-500 uppercase"
+              <div className="grid border-b border-stone-300 bg-stone-100 text-[10px] font-bold text-stone-500 uppercase"
+                style={{ gridTemplateColumns: `${mfgW}px ${descW}px 80px 70px 70px 70px 1fr` }}>
+                <div className="px-2 py-1 border-r border-stone-200">Mfg</div>
+                <div className="px-2 py-1 border-r border-stone-200">Description</div>
+                <div className="px-2 py-1 text-center border-r border-stone-200">Size/Unit</div>
+                <div className="px-2 py-1 text-center border-r border-stone-200">U/Case</div>
+                <div className="px-2 py-1 text-center border-r border-stone-200">WH Loc</div>
+                <div className="px-2 py-1 text-center border-r border-stone-200">Case Qty</div>
+                <div className="px-2 py-1">Notes</div>
+              </div>
+
+              {group.items.map((item, ii) => {
+                const itemKey = String(item.id);
+                const hasQty = quantities[itemKey] > 0;
+                const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
+
+                return (
+                  <div key={item.id}
+                    className={`grid border-b border-stone-100 text-sm ${hasQty ? "bg-amber-50" : ii % 2 ? "bg-stone-50/50" : ""}`}
                     style={{ gridTemplateColumns: `${mfgW}px ${descW}px 80px 70px 70px 70px 1fr` }}>
-                    <div className="px-2 py-1 border-r border-stone-200">Mfg</div>
-                    <div className="px-2 py-1 border-r border-stone-200">Description</div>
-                    <div className="px-2 py-1 text-center border-r border-stone-200">Size/Unit</div>
-                    <div className="px-2 py-1 text-center border-r border-stone-200">U/Case</div>
-                    <div className="px-2 py-1 text-center border-r border-stone-200">WH Loc</div>
-                    <div className="px-2 py-1 text-center border-r border-stone-200">Case Qty</div>
-                    <div className="px-2 py-1">Notes</div>
+                    <div className="px-2 py-1.5 border-r border-stone-100 truncate text-stone-500 text-xs">{item._mfg_name || "—"}</div>
+                    <div className="px-2 py-1.5 border-r border-stone-100 truncate font-medium text-stone-800">{item.name}</div>
+                    <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{sizeUnit || "—"}</div>
+                    <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{item.case_size || "—"}</div>
+                    <div className="px-2 py-1.5 text-center border-r border-stone-100 text-xs text-amber-700 font-medium">{item.warehouse_location || "—"}</div>
+                    <div className="px-1 py-1 border-r border-stone-100 flex items-center justify-center">
+                      {readOnly ? (
+                        <span className={`text-sm font-bold ${hasQty ? "text-amber-800" : "text-stone-300"}`}>{hasQty ? quantities[itemKey] : "—"}</span>
+                      ) : (
+                        <input type="number" min={0} value={quantities[itemKey] || ""} onChange={e => setQty(itemKey, e.target.value)} placeholder="—"
+                          data-grid-cell={`qty-${itemKey}`}
+                          onKeyDown={e => handleGridNav(e, itemKey, "qty")}
+                          className={`w-14 text-center py-1 rounded text-sm font-bold border focus:outline-none focus:ring-2 focus:ring-amber-500 ${hasQty ? "border-amber-400 bg-amber-100 text-amber-800" : "border-stone-200 text-stone-400"}`} />
+                      )}
+                    </div>
+                    <div className="px-1 py-1 flex items-center">
+                      {readOnly ? (
+                        <span className="text-xs text-stone-600 truncate">{itemNotes[itemKey] || ""}</span>
+                      ) : (
+                        <input type="text" value={itemNotes[itemKey] || ""}
+                          onChange={e => setItemNotes(prev => ({ ...prev, [itemKey]: e.target.value }))}
+                          data-grid-cell={`notes-${itemKey}`}
+                          onKeyDown={e => handleGridNav(e, itemKey, "notes")}
+                          placeholder="Optional note..."
+                          className="w-full px-2 py-1 text-xs border border-stone-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                      )}
+                    </div>
                   </div>
-
-                  {catItems.map((item, ii) => {
-                    const itemKey = String(item.id);
-                    const hasQty = quantities[itemKey] > 0;
-                    const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
-
-                    return (
-                      <div key={item.id}
-                        className={`grid border-b border-stone-100 text-sm ${hasQty ? "bg-amber-50" : ii % 2 ? "bg-stone-50/50" : ""}`}
-                        style={{ gridTemplateColumns: `${mfgW}px ${descW}px 80px 70px 70px 70px 1fr` }}>
-                        <div className="px-2 py-1.5 border-r border-stone-100 truncate text-stone-500 text-xs">{item._mfg_name || "—"}</div>
-                        <div className="px-2 py-1.5 border-r border-stone-100 truncate font-medium text-stone-800">{item.name}</div>
-                        <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{sizeUnit || "—"}</div>
-                        <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{item.case_size || "—"}</div>
-                        <div className="px-2 py-1.5 text-center border-r border-stone-100 text-xs text-amber-700 font-medium">{item.warehouse_location || "—"}</div>
-                        <div className="px-1 py-1 border-r border-stone-100 flex items-center justify-center">
-                          {readOnly ? (
-                            <span className={`text-sm font-bold ${hasQty ? "text-amber-800" : "text-stone-300"}`}>{hasQty ? quantities[itemKey] : "—"}</span>
-                          ) : (
-                            <input type="number" min={0} value={quantities[itemKey] || ""} onChange={e => setQty(itemKey, e.target.value)} placeholder="—"
-                              data-grid-cell={`qty-${itemKey}`}
-                              onKeyDown={e => handleGridNav(e, itemKey, "qty")}
-                              className={`w-14 text-center py-1 rounded text-sm font-bold border focus:outline-none focus:ring-2 focus:ring-amber-500 ${hasQty ? "border-amber-400 bg-amber-100 text-amber-800" : "border-stone-200 text-stone-400"}`} />
-                          )}
-                        </div>
-                        <div className="px-1 py-1 flex items-center">
-                          {readOnly ? (
-                            <span className="text-xs text-stone-600 truncate">{itemNotes[itemKey] || ""}</span>
-                          ) : (
-                            <input type="text" value={itemNotes[itemKey] || ""}
-                              onChange={e => setItemNotes(prev => ({ ...prev, [itemKey]: e.target.value }))}
-                              data-grid-cell={`notes-${itemKey}`}
-                              onKeyDown={e => handleGridNav(e, itemKey, "notes")}
-                              placeholder="Optional note..."
-                              className="w-full px-2 py-1 text-xs border border-stone-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500" />
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
           </div>
@@ -429,13 +414,11 @@ export default function StoreNeeds({ data, onSubmitOrder }) {
                     <div className="text-stone-500">{caseCount} cases</div>
                   </div>
                   <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border shrink-0 ${
-                    o.status === "draft" ? "bg-stone-100 text-stone-600 border-stone-300" :
-                    o.status === "pending" ? "bg-yellow-100 text-yellow-800 border-yellow-200" :
-                    o.status === "picking" ? "bg-blue-100 text-blue-800 border-blue-200" :
-                    o.status === "picked" ? "bg-green-100 text-green-800 border-green-200" :
+                    o.status === "draft" ? "bg-amber-100 text-amber-800 border-amber-200" :
+                    o.status === "submitted" ? "bg-green-100 text-green-800 border-green-200" :
                     "bg-stone-100 text-stone-500 border-stone-200"
                   }`}>
-                    {o.status}
+                    {o.status === "draft" ? "In Progress" : o.status === "submitted" ? "Submitted" : o.status}
                   </span>
                   <button onClick={() => deleteOrder(o.id)}
                     className="text-stone-300 hover:text-red-500 transition-colors text-sm shrink-0" title="Delete list">

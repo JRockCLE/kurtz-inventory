@@ -74,32 +74,52 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
 
   const updateStatus = async (status) => {
     const u = { status, updated_at: new Date().toISOString() };
-    if (status === "picked") u.picked_at = u.updated_at;
-    if (status === "delivered") u.delivered_at = u.updated_at;
+    if (status === "completed") u.picked_at = u.updated_at;
     await qry("store_orders", { update: u, match: { id: orderId } });
     setOrder(prev => ({ ...prev, ...u }));
     onUpdate?.();
   };
 
-  const togglePicked = async (itemId, picked) => {
-    await qry("store_order_items", { update: { picked_yn: picked }, match: { id: itemId } });
-    load();
-  };
-
-  const setCasesPicked = async (itemId, qty) => {
-    await qry("store_order_items", {
+  const setCasesPicked = (itemId, qty) => {
+    // Optimistic local update — no reload
+    setItems(prev => prev.map(it => it.id === itemId ? { ...it, cases_picked: qty, picked_yn: qty > 0 } : it));
+    // Fire-and-forget save
+    qry("store_order_items", {
       update: { cases_picked: qty, picked_yn: qty > 0 },
       match: { id: itemId },
-    });
-    load();
+    }).catch(console.error);
   };
 
-  const statusColors = {
-    pending: "bg-yellow-100 text-yellow-800",
-    picking: "bg-blue-100 text-blue-800",
-    picked: "bg-green-100 text-green-800",
-    delivered: "bg-stone-200 text-stone-600",
+  // Inline edit: update the local_item — no reload
+  const updateItemField = (item, field, value) => {
+    if (!item.item_id) return;
+    const update = {};
+    if (field === "warehouse_location") update.warehouse_location = value || null;
+    if (field === "expiration_date") update.expiration_date = value && value.trim() ? value : null;
+    update.updated_at = new Date().toISOString();
+
+    // Optimistic local update
+    setItems(prev => prev.map(it => {
+      if (it.id !== item.id) return it;
+      const next = { ...it };
+      if (field === "warehouse_location") next.warehouse_location = value || null;
+      if (field === "expiration_date") next._expiration_date = value && value.trim() ? value : null;
+      return next;
+    }));
+
+    qry("local_items", { update, match: { id: item.item_id } }).catch(console.error);
+    if (field === "warehouse_location") {
+      qry("store_order_items", { update: { warehouse_location: value || null }, match: { id: item.id } }).catch(console.error);
+    }
   };
+
+  const statusLabels = { submitted: "Needs Picked", picking: "In Progress", completed: "Completed" };
+  const statusColors = {
+    submitted: "bg-yellow-100 text-yellow-800",
+    picking: "bg-blue-100 text-blue-800",
+    completed: "bg-green-100 text-green-800",
+  };
+  const isEditable = order?.status === "picking";
 
   if (loading || !order) return <div className="p-8 text-center text-stone-400">Loading...</div>;
 
@@ -109,47 +129,38 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
         <div className="flex items-center justify-between mb-2">
           <button onClick={onBack} className="text-stone-500 hover:text-stone-800 text-sm">← Pick Lists</button>
           <div className="flex gap-2">
-            <button onClick={() => window.print()}
+            <button onClick={async () => {
+                if (order.status === "submitted") await updateStatus("picking");
+                window.print();
+              }}
               className="px-3 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-sm hover:bg-stone-200">
-              🖨️ Print
+              Print
             </button>
-            {order.status === "pending" && (
-              <button onClick={() => updateStatus("picking")}
-                className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">
-                Start Picking
-              </button>
-            )}
-            {order.status === "picking" && (
-              <button onClick={() => updateStatus("picked")}
+            {(order.status === "submitted" || order.status === "picking") && (
+              <button onClick={() => updateStatus("completed")}
                 className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">
-                Mark Complete
+                Finalize Pick List
               </button>
             )}
-            {order.status === "picked" && (
-              <>
-                <button onClick={() => updateStatus("picking")}
-                  className="px-3 py-1.5 bg-stone-200 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-300">
-                  Reopen
-                </button>
-                <button onClick={() => updateStatus("delivered")}
-                  className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-sm font-bold hover:bg-amber-700">
-                  Mark Delivered
-                </button>
-              </>
+            {order.status === "completed" && (
+              <button onClick={() => updateStatus("picking")}
+                className="px-3 py-1.5 bg-stone-200 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-300">
+                Reopen
+              </button>
             )}
           </div>
         </div>
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-bold text-stone-800">Pick List #{order.id}</h2>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusColors[order.status]}`}>
-            {order.status?.toUpperCase()}
+          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusColors[order.status] || "bg-stone-100 text-stone-600"}`}>
+            {statusLabels[order.status] || order.status}
           </span>
           <span className="text-xs text-stone-400">{new Date(order.created_at).toLocaleString()}</span>
-          {order.status === "pending" && (
-            <span className="text-xs text-stone-500 italic">Print to pick by hand, or click "Start Picking" to enter live</span>
+          {order.status === "submitted" && (
+            <span className="text-xs text-stone-500 italic">Print to begin picking</span>
           )}
           {order.status === "picking" && (
-            <span className="text-xs text-blue-600 italic">Enter picked quantities — click Mark Complete when done</span>
+            <span className="text-xs text-blue-600 italic">Make corrections and enter picked qty — click "Finalize Pick List" when done</span>
           )}
         </div>
       </div>
@@ -221,15 +232,31 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
               <div key={item.id}
                 className={`grid border-b border-stone-100 items-center text-sm ${item.picked_yn ? "bg-green-50" : ii % 2 ? "bg-stone-50/40" : ""}`}
                 style={{ gridTemplateColumns: "70px 130px 1fr 90px 90px 1fr 75px 75px" }}>
-                <div className="px-2 py-2 text-center border-r border-stone-100 font-bold text-stone-800">{item.warehouse_location || "—"}</div>
+                {isEditable ? (
+                  <div className="px-1 py-1 text-center border-r border-stone-100">
+                    <input type="text" defaultValue={item.warehouse_location || ""}
+                      onBlur={e => { if (e.target.value !== (item.warehouse_location || "")) updateItemField(item, "warehouse_location", e.target.value); }}
+                      className="w-full text-center px-1 py-1 text-xs font-bold border border-stone-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                  </div>
+                ) : (
+                  <div className="px-2 py-2 text-center border-r border-stone-100 font-bold text-stone-800">{item.warehouse_location || "—"}</div>
+                )}
                 <div className="px-2 py-2 border-r border-stone-100 truncate text-stone-500 text-xs">{item._mfg_name || "—"}</div>
                 <div className={`px-2 py-2 border-r border-stone-100 truncate font-medium ${item.picked_yn ? "line-through text-stone-400" : "text-stone-800"}`}>{item.item_name}</div>
                 <div className="px-2 py-2 text-center border-r border-stone-100 text-stone-500 text-xs">{sizeUnit || "—"}</div>
-                <div className="px-2 py-2 text-center border-r border-stone-100 text-stone-500 text-xs">{item._expiration_date ? fmtDate(item._expiration_date) : "—"}</div>
+                {isEditable ? (
+                  <div className="px-1 py-1 text-center border-r border-stone-100">
+                    <input type="date" defaultValue={item._expiration_date ? new Date(item._expiration_date).toISOString().slice(0, 10) : ""}
+                      onBlur={e => updateItemField(item, "expiration_date", e.target.value)}
+                      className="w-full px-1 py-1 text-xs border border-stone-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                  </div>
+                ) : (
+                  <div className="px-2 py-2 text-center border-r border-stone-100 text-stone-500 text-xs">{item._expiration_date ? fmtDate(item._expiration_date) : "—"}</div>
+                )}
                 <div className="px-2 py-2 border-r border-stone-100 text-xs text-amber-700 italic truncate">{item.notes || ""}</div>
                 <div className="px-2 py-2 text-center border-r border-stone-100 text-xl font-black text-amber-700">{item.cases_requested}</div>
                 <div className="px-1 py-1 flex items-center justify-center">
-                  {order.status === "picking" || order.status === "pending" ? (
+                  {isEditable ? (
                     <input type="number" min={0} value={item.cases_picked ?? ""} placeholder="—"
                       onChange={e => setCasesPicked(item.id, parseInt(e.target.value) || 0)}
                       className="w-14 text-center py-1.5 rounded border border-stone-300 text-base font-bold focus:outline-none focus:ring-2 focus:ring-green-500" />

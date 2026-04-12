@@ -130,8 +130,11 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
   const [photos, setPhotos] = useState(item?.photos || []);
   const [defaultPhoto, setDefaultPhoto] = useState(item?.default_photo || null);
   const [newPhotos, setNewPhotos] = useState([]); // [{ file, preview }]
-  const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const photoInputRef2 = useRef(null);
+  const [lightbox, setLightbox] = useState(null); // { idx }
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panRef = useRef(null);
 
   const handlePhotoUpload = (e) => {
     const files = Array.from(e.target.files || []);
@@ -293,7 +296,9 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
             <div className="flex gap-2 flex-wrap">
               {photos.map((url, i) => (
                 <div key={url} className={`relative w-20 h-20 rounded-lg overflow-hidden border-2 cursor-pointer transition-colors ${defaultPhoto === url ? "border-amber-500" : "border-stone-200 hover:border-stone-300"}`}
-                  onClick={() => setDefaultPhoto(url)} title={defaultPhoto === url ? "Default photo" : "Click to set as default"}>
+                  onClick={() => { setLightbox({ idx: i }); setZoom(1); setPan({ x: 0, y: 0 }); }}
+                  onDoubleClick={(e) => { e.stopPropagation(); setDefaultPhoto(url); }}
+                  title="Click to view, double-click to set as default">
                   <img src={url} alt="" className="w-full h-full object-cover" />
                   {defaultPhoto === url && (
                     <div className="absolute bottom-0 inset-x-0 bg-amber-500 text-white text-[9px] text-center font-bold py-0.5">DEFAULT</div>
@@ -436,6 +441,60 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
         </div>
       </div>
       {/* ─── Add Location Modal ─── */}
+      {/* ─── Photo Lightbox ─── */}
+      {lightbox && photos[lightbox.idx] && (
+        <div className="fixed inset-0 z-[100] bg-black/85 flex flex-col" onClick={() => setLightbox(null)}>
+          <div className="flex items-center justify-between px-4 py-2">
+            <span className="text-white/70 text-sm">{lightbox.idx + 1} / {photos.length}</span>
+            <div className="flex items-center gap-2">
+              <button onClick={e => { e.stopPropagation(); setZoom(z => Math.max(1, z - 0.5)); }}
+                className="w-7 h-7 bg-white/10 hover:bg-white/20 rounded text-white text-sm font-bold">−</button>
+              <span className="text-white/70 text-xs w-10 text-center">{Math.round(zoom * 100)}%</span>
+              <button onClick={e => { e.stopPropagation(); setZoom(z => Math.min(8, z + 0.5)); }}
+                className="w-7 h-7 bg-white/10 hover:bg-white/20 rounded text-white text-sm font-bold">+</button>
+              <button onClick={e => { e.stopPropagation(); setZoom(1); setPan({ x: 0, y: 0 }); }}
+                className="px-2 h-7 bg-white/10 hover:bg-white/20 rounded text-white text-[10px] font-medium">Reset</button>
+              <button onClick={e => { e.stopPropagation(); setDefaultPhoto(photos[lightbox.idx]); }}
+                className={`px-2 h-7 rounded text-[10px] font-bold ${defaultPhoto === photos[lightbox.idx] ? "bg-amber-500 text-white" : "bg-white/10 hover:bg-white/20 text-white"}`}>
+                {defaultPhoto === photos[lightbox.idx] ? "Default" : "Set Default"}
+              </button>
+              <button onClick={() => setLightbox(null)}
+                className="w-7 h-7 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-white text-sm ml-2">×</button>
+            </div>
+          </div>
+          <div className="flex-1 flex items-center justify-center relative overflow-hidden min-h-0"
+            onClick={e => e.stopPropagation()}
+            onWheel={e => { e.preventDefault(); setZoom(z => Math.max(1, Math.min(8, z + (e.deltaY < 0 ? 0.25 : -0.25)))); }}
+            onMouseDown={e => { if (zoom > 1) panRef.current = { startX: e.clientX, startY: e.clientY, origX: pan.x, origY: pan.y }; }}
+            onMouseMove={e => { if (panRef.current) setPan({ x: panRef.current.origX + (e.clientX - panRef.current.startX), y: panRef.current.origY + (e.clientY - panRef.current.startY) }); }}
+            onMouseUp={() => { panRef.current = null; }}
+            onMouseLeave={() => { panRef.current = null; }}
+            style={{ cursor: zoom > 1 ? (panRef.current ? "grabbing" : "grab") : "default" }}>
+            <img src={photos[lightbox.idx]} alt="" draggable={false}
+              className="max-w-full max-h-full object-contain select-none pointer-events-none"
+              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transition: panRef.current ? "none" : "transform 0.1s" }} />
+            {lightbox.idx > 0 && zoom === 1 && (
+              <button onClick={e => { e.stopPropagation(); setLightbox({ idx: lightbox.idx - 1 }); setZoom(1); setPan({ x: 0, y: 0 }); }}
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/15 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-xl font-bold">‹</button>
+            )}
+            {lightbox.idx < photos.length - 1 && zoom === 1 && (
+              <button onClick={e => { e.stopPropagation(); setLightbox({ idx: lightbox.idx + 1 }); setZoom(1); setPan({ x: 0, y: 0 }); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/15 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-xl font-bold">›</button>
+            )}
+          </div>
+          {photos.length > 1 && (
+            <div className="flex gap-1.5 justify-center py-2">
+              {photos.map((url, i) => (
+                <div key={i} onClick={e => { e.stopPropagation(); setLightbox({ idx: i }); setZoom(1); setPan({ x: 0, y: 0 }); }}
+                  className={`w-12 h-12 shrink-0 rounded overflow-hidden cursor-pointer border-2 transition-colors ${i === lightbox.idx ? "border-amber-500" : "border-transparent opacity-60 hover:opacity-100"}`}>
+                  <img src={url} alt="" className="w-full h-full object-cover" />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {f._showLocModal && <AddLocationModal ic={ic} lc={lc} onClose={(label) => {
         if (label) set("warehouse_location", label);
         set("_showLocModal", false);

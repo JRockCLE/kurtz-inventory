@@ -19,7 +19,7 @@ export default function App() {
   const data = useRefData();
   const { orders, loading: ordersLoading, refresh: refreshOrders } = useOrders();
 
-  const pendingCount = orders.filter(o => o.status === "pending" || o.status === "picking").length;
+  const pendingCount = orders.filter(o => o.status === "submitted" || o.status === "picking").length;
 
   const tabs = [
     { id: "receiving", label: "Receiving", emoji: "📦" },

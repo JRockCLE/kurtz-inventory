@@ -2,6 +2,7 @@ import { useState } from "react";
 import QuickAdd from "./QuickAdd";
 import Locations from "./Locations";
 import UnprocessedItems from "./UnprocessedItems";
+import SyncToStoreLive from "./SyncToStoreLive";
 
 export default function Settings() {
   const [subtab, setSubtab] = useState("quickadd");
@@ -9,6 +10,7 @@ export default function Settings() {
   const tabs = [
     { id: "quickadd", label: "Quick Add" },
     { id: "unprocessed", label: "Unprocessed Items" },
+    { id: "sync", label: "Sync to StoreLIVE" },
     { id: "locations", label: "Locations" },
   ];
 
@@ -27,6 +29,7 @@ export default function Settings() {
       <div className="flex-1 overflow-hidden">
         {subtab === "quickadd" && <QuickAdd />}
         {subtab === "unprocessed" && <UnprocessedItems />}
+        {subtab === "sync" && <SyncToStoreLive />}
         {subtab === "locations" && <Locations />}
       </div>
     </div>
