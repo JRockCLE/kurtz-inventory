@@ -378,14 +378,14 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
               </div>
               <div>
                 <label className={lc}>Category</label>
-                <SearchSelect value={f.category_id} displayValue={f.category_name}
+                <SearchSelect key={`cat-${f.dept_id}`} value={f.category_id} displayValue={f.category_name}
                   fetchOptions={(typed) => searchCategories(typed, f.dept_id)}
                   onSelect={(val, label) => { set("category_id", val || ""); set("category_name", label || ""); set("sub_category_id", ""); set("sub_category_name", ""); }}
                   placeholder={f.dept_id ? "Type to search..." : "Select dept first"} />
               </div>
               <div>
                 <label className={lc}>Sub-Category</label>
-                <SearchSelect value={f.sub_category_id} displayValue={f.sub_category_name}
+                <SearchSelect key={`sub-${f.category_id}`} value={f.sub_category_id} displayValue={f.sub_category_name}
                   fetchOptions={(typed) => searchSubCategories(typed, f.category_id)}
                   onSelect={(val, label) => { set("sub_category_id", val || ""); set("sub_category_name", label || ""); }}
                   placeholder={f.category_id ? "Type to search..." : "Select category first"} />

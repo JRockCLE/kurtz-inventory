@@ -711,14 +711,14 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
                             </div>
                             <div>
                               <label className={lc}>Category</label>
-                              <SearchSelect value={f.category_id} displayValue={f.category_name}
+                              <SearchSelect key={`cat-${f.dept_id}`} value={f.category_id} displayValue={f.category_name}
                                 fetchOptions={(typed) => searchCategories(typed, f.dept_id)}
                                 onSelect={(v, l) => { set("category_id", v || ""); set("category_name", l || ""); set("sub_category_id", ""); set("sub_category_name", ""); }}
                                 placeholder={f.dept_id ? "Type category..." : "Select dept first"} />
                             </div>
                             <div>
                               <label className={lc}>Sub-Category</label>
-                              <SearchSelect value={f.sub_category_id} displayValue={f.sub_category_name}
+                              <SearchSelect key={`sub-${f.category_id}`} value={f.sub_category_id} displayValue={f.sub_category_name}
                                 fetchOptions={(typed) => searchSubCategories(typed, f.category_id)}
                                 onSelect={(v, l) => { set("sub_category_id", v || ""); set("sub_category_name", l || ""); }}
                                 placeholder={f.category_id ? "Type sub-cat..." : "Select category first"} />
@@ -780,7 +780,7 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
                           {f._status === "found" && f.category_id ? (
                             <input className={`${ic} bg-stone-50`} value={f.category_name || "—"} disabled />
                           ) : (
-                            <SearchSelect value={f.category_id} displayValue={f.category_name}
+                            <SearchSelect key={`cat-${f.dept_id}`} value={f.category_id} displayValue={f.category_name}
                               fetchOptions={(typed) => searchCategories(typed, f.dept_id)}
                               onSelect={(v, l) => { set("category_id", v || ""); set("category_name", l || ""); set("sub_category_id", ""); set("sub_category_name", ""); }}
                               placeholder={f.dept_id ? "Type category..." : "Select dept first"} />
@@ -791,7 +791,7 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
                           {f._status === "found" && f.sub_category_id ? (
                             <input className={`${ic} bg-stone-50`} value={f.sub_category_name || "—"} disabled />
                           ) : (
-                            <SearchSelect value={f.sub_category_id} displayValue={f.sub_category_name}
+                            <SearchSelect key={`sub-${f.category_id}`} value={f.sub_category_id} displayValue={f.sub_category_name}
                               fetchOptions={(typed) => searchSubCategories(typed, f.category_id)}
                               onSelect={(v, l) => { set("sub_category_id", v || ""); set("sub_category_name", l || ""); }}
                               placeholder={f.category_id ? "Type sub-cat..." : "Select category first"} />

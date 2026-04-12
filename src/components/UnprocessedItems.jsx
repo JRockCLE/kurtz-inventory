@@ -304,16 +304,28 @@ export default function UnprocessedItems() {
               <div>
                 <label className={lc}>Department</label>
                 <SearchSelect value={f.dept_id} displayValue={f.dept_name} fetchOptions={searchDepts}
-                  onSelect={(v, l) => { set("dept_id", v || ""); set("dept_name", l || ""); }} placeholder="Search..." />
+                  onSelect={(v, l) => {
+                    set("dept_id", v || "");
+                    set("dept_name", l || "");
+                    // Clear category/sub-category when department changes
+                    set("category_id", ""); set("category_name", "");
+                    set("sub_category_id", ""); set("sub_category_name", "");
+                  }} placeholder="Search..." />
               </div>
               <div>
                 <label className={lc}>Category</label>
-                <SearchSelect value={f.category_id} displayValue={f.category_name} fetchOptions={searchCategories}
-                  onSelect={(v, l) => { set("category_id", v || ""); set("category_name", l || ""); }} placeholder="Search..." />
+                <SearchSelect key={`cat-${f.dept_id}`} value={f.category_id} displayValue={f.category_name}
+                  fetchOptions={(typed) => searchCategories(typed, f.dept_id)}
+                  onSelect={(v, l) => {
+                    set("category_id", v || "");
+                    set("category_name", l || "");
+                    set("sub_category_id", ""); set("sub_category_name", "");
+                  }} placeholder="Search..." />
               </div>
               <div>
                 <label className={lc}>Sub-Category</label>
-                <SearchSelect value={f.sub_category_id} displayValue={f.sub_category_name} fetchOptions={searchSubCategories}
+                <SearchSelect key={`sub-${f.category_id}`} value={f.sub_category_id} displayValue={f.sub_category_name}
+                  fetchOptions={(typed) => searchSubCategories(typed, f.category_id)}
                   onSelect={(v, l) => { set("sub_category_id", v || ""); set("sub_category_name", l || ""); }} placeholder="Search..." />
               </div>
             </div>
