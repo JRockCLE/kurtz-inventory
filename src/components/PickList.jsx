@@ -49,6 +49,23 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
             localById[x.id] = x;
           });
         } catch {}
+
+        // Fetch multi-location assignments
+        try {
+          const locRows = await qry("local_item_locations", {
+            select: "local_item_id,location,is_primary",
+            filters: `local_item_id=in.(${itemIds.join(",")})`,
+            order: "is_primary.desc,location.asc",
+          });
+          const locMap = {};
+          locRows.forEach(l => {
+            if (!locMap[l.local_item_id]) locMap[l.local_item_id] = [];
+            locMap[l.local_item_id].push(l);
+          });
+          Object.values(localById).forEach(li => {
+            li._locations = locMap[li.id] || [];
+          });
+        } catch {}
       }
 
       // Merge details into order items
@@ -58,7 +75,14 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
           x._mfg_name = li._mfg_name;
           x._ref_unit_cd = li.ref_unit_cd;
           x._expiration_date = li.expiration_date;
-          if (!x.warehouse_location) x.warehouse_location = li.warehouse_location;
+          const locs = li._locations || [];
+          const primary = locs.find(l => l.is_primary)?.location || locs[0]?.location || li.warehouse_location;
+          if (!x.warehouse_location) x.warehouse_location = primary;
+          x._additional_locations = locs
+            .map(l => l.location)
+            .filter(loc => loc && loc !== x.warehouse_location);
+        } else {
+          x._additional_locations = [];
         }
       });
 
@@ -180,8 +204,9 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
       <div className="flex-1 overflow-auto bg-white print:overflow-visible">
         {/* Column headers */}
         <div className="grid border-b-2 border-stone-300 bg-stone-100 text-[10px] font-bold text-stone-500 uppercase sticky top-0 z-10 print:hidden"
-          style={{ gridTemplateColumns: "70px 130px 1fr 90px 90px 1fr 75px 75px" }}>
+          style={{ gridTemplateColumns: "70px 90px 130px 1fr 90px 90px 1fr 75px 75px" }}>
           <div className="px-2 py-1.5 text-center border-r border-stone-200">WH Loc</div>
+          <div className="px-2 py-1.5 text-center border-r border-stone-200">Add'l Loc</div>
           <div className="px-2 py-1.5 border-r border-stone-200">Mfg</div>
           <div className="px-2 py-1.5 border-r border-stone-200">Description</div>
           <div className="px-2 py-1.5 text-center border-r border-stone-200">Size/Unit</div>
@@ -196,6 +221,7 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
           <thead style={{ display: "table-header-group" }}>
             <tr className="border-b-2 border-stone-400 text-[10px] font-bold text-stone-600 uppercase">
               <th className="px-2 py-1.5 text-center whitespace-nowrap">WH Loc</th>
+              <th className="px-2 py-1.5 text-center whitespace-nowrap">Add'l Loc</th>
               <th className="px-2 py-1.5 text-left whitespace-nowrap">Mfg</th>
               <th className="px-2 py-1.5 text-left">Description</th>
               <th className="px-2 py-1.5 text-center whitespace-nowrap">Size/Unit</th>
@@ -211,6 +237,7 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
               return (
                 <tr key={`p-${item.id}`} className={ii % 2 ? "bg-stone-50" : ""}>
                   <td className="px-2 py-1.5 text-center font-bold text-stone-800 border-b border-stone-200 whitespace-nowrap">{item.warehouse_location || "—"}</td>
+                  <td className="px-2 py-1.5 text-center text-stone-600 border-b border-stone-200 whitespace-nowrap">{item._additional_locations?.length ? item._additional_locations.join(", ") : ""}</td>
                   <td className="px-2 py-1.5 text-stone-500 border-b border-stone-200 whitespace-nowrap">{item._mfg_name || "—"}</td>
                   <td className="px-2 py-1.5 font-medium text-stone-800 border-b border-stone-200">{item.item_name}</td>
                   <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{sizeUnit || "—"}</td>
@@ -231,7 +258,7 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
             return (
               <div key={item.id}
                 className={`grid border-b border-stone-100 items-center text-sm ${item.picked_yn ? "bg-green-50" : ii % 2 ? "bg-stone-50/40" : ""}`}
-                style={{ gridTemplateColumns: "70px 130px 1fr 90px 90px 1fr 75px 75px" }}>
+                style={{ gridTemplateColumns: "70px 90px 130px 1fr 90px 90px 1fr 75px 75px" }}>
                 {isEditable ? (
                   <div className="px-1 py-1 text-center border-r border-stone-100">
                     <input type="text" defaultValue={item.warehouse_location || ""}
@@ -241,6 +268,7 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
                 ) : (
                   <div className="px-2 py-2 text-center border-r border-stone-100 font-bold text-stone-800">{item.warehouse_location || "—"}</div>
                 )}
+                <div className="px-2 py-2 text-center border-r border-stone-100 text-stone-600 text-xs truncate" title={item._additional_locations?.join(", ") || ""}>{item._additional_locations?.length ? item._additional_locations.join(", ") : ""}</div>
                 <div className="px-2 py-2 border-r border-stone-100 truncate text-stone-500 text-xs">{item._mfg_name || "—"}</div>
                 <div className={`px-2 py-2 border-r border-stone-100 truncate font-medium ${item.picked_yn ? "line-through text-stone-400" : "text-stone-800"}`}>{item.item_name}</div>
                 <div className="px-2 py-2 text-center border-r border-stone-100 text-stone-500 text-xs">{sizeUnit || "—"}</div>
