@@ -19,6 +19,7 @@ export default function QuickAdd() {
 
   const [expDate, setExpDate] = useState("");
   const [caseSize, setCaseSize] = useState("");
+  const [productType, setProductType] = useState("dry");
 
   // Photo state for unprocessed items
   const [photos, setPhotos] = useState([]); // [{ file, preview }]
@@ -62,6 +63,7 @@ export default function QuickAdd() {
     setLocation("");
     setExpDate("");
     setCaseSize("");
+    setProductType("dry");
     setStatus(null);
     setPhotos([]);
     setNotes("");
@@ -78,6 +80,7 @@ export default function QuickAdd() {
     const existing = await checkBarcodeInSystem(upc);
     if (existing.length > 0) {
       const item = existing[0];
+      setProductType(item.product_type || "dry");
       setStatus({ type: "found", message: item.name, item, upc });
       setTimeout(() => locationRef.current?.querySelector("input")?.focus(), 100);
       return;
@@ -98,7 +101,7 @@ export default function QuickAdd() {
             ref_unit_cd: posbe.unit_cd ? parseInt(posbe.unit_cd) : null,
             from_posbe: true, posbe_item_id: posbe.item_id,
             sync_status: "local", created_by: "QuickAdd", active_yn: "Y",
-            cases_on_hand: 0,
+            cases_on_hand: 0, product_type: "dry",
           },
         });
         setStatus({ type: "created", message: `${posbe.name} (from StoreLIVE)`, item: { ...newItem, name: posbe.name }, upc });
@@ -128,6 +131,7 @@ export default function QuickAdd() {
       if (isFirst) itemUpdate.warehouse_location = location;
       if (expDate) itemUpdate.expiration_date = expDate;
       if (caseSize) itemUpdate.case_size = parseInt(caseSize);
+      if (productType && productType !== status.item.product_type) itemUpdate.product_type = productType;
 
       // Upload and save photos
       if (photos.length > 0) {
@@ -292,6 +296,21 @@ export default function QuickAdd() {
           {/* ─── FOUND / CREATED: assign location ─── */}
           {status && (status.type === "found" || status.type === "created") && (
             <div className="space-y-3">
+              <div>
+                <label className={lc}>Type</label>
+                <div className="flex gap-1.5">
+                  {[
+                    { v: "dry", label: "Dry" },
+                    { v: "cooler", label: "Cooler" },
+                    { v: "freezer", label: "Freezer" },
+                  ].map(o => (
+                    <button key={o.v} type="button" onClick={() => setProductType(o.v)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${productType === o.v ? "bg-amber-600 text-white" : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`}>
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className={lc}>Units / Case</label>

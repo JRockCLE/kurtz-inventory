@@ -151,6 +151,7 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
 
   // Quick-add location
   const [showNewLoc, setShowNewLoc] = useState(false);
+  const [newLocPrefix, setNewLocPrefix] = useState("");
   const [newLocSec, setNewLocSec] = useState("");
   const [newLocRow, setNewLocRow] = useState("");
   const [newLocSlot, setNewLocSlot] = useState("");
@@ -159,7 +160,7 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
   const [savingLoc, setSavingLoc] = useState(false);
 
   const newLocLabel = newLocSec && newLocRow
-    ? `${newLocSec}${newLocRow.toUpperCase()}${newLocSlot ? `-${newLocSlot}` : ""}`
+    ? `${newLocPrefix ? `${newLocPrefix}-` : ""}${newLocSec}${newLocRow.toUpperCase()}${newLocSlot ? `-${newLocSlot}` : ""}`
     : "";
 
   const addNewLocation = async () => {
@@ -168,6 +169,7 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
     try {
       await qry("warehouse_locations", {
         insert: {
+          label: newLocLabel,
           column_num: parseInt(newLocSec),
           row_letter: newLocRow.toUpperCase().trim(),
           slot_num: newLocSlot ? parseInt(newLocSlot) : null,
@@ -176,13 +178,13 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
         },
       });
       set("warehouse_location", newLocLabel);
-      setNewLocSec(""); setNewLocRow(""); setNewLocSlot(""); setNewLocWhSection(""); setNewLocAisle(""); setShowNewLoc(false);
+      setNewLocPrefix(""); setNewLocSec(""); setNewLocRow(""); setNewLocSlot(""); setNewLocWhSection(""); setNewLocAisle(""); setShowNewLoc(false);
     } catch (err) { alert("Error: " + err.message); }
     setSavingLoc(false);
   };
 
   const resetNewLoc = () => {
-    setShowNewLoc(false); setNewLocSec(""); setNewLocRow(""); setNewLocSlot(""); setNewLocWhSection(""); setNewLocAisle("");
+    setShowNewLoc(false); setNewLocPrefix(""); setNewLocSec(""); setNewLocRow(""); setNewLocSlot(""); setNewLocWhSection(""); setNewLocAisle("");
   };
 
   // Supplier (new doc)
@@ -851,6 +853,11 @@ export default function ReceivingDoc({ docId, onBack, onUpdate }) {
                       {showNewLoc ? (
                         <div className="space-y-1.5">
                           <div className="flex gap-1">
+                            <select className={`${ic} w-16`} value={newLocPrefix} onChange={e => setNewLocPrefix(e.target.value)} title="Prefix">
+                              <option value="">—</option>
+                              <option value="C">C</option>
+                              <option value="F">F</option>
+                            </select>
                             <input type="number" className={`${ic} w-14`} value={newLocSec} onChange={e => setNewLocSec(e.target.value)} placeholder="Sec#" autoFocus />
                             <input className={`${ic} w-10`} value={newLocRow} onChange={e => setNewLocRow(e.target.value)} placeholder="Row" maxLength={2} />
                             <input type="number" className={`${ic} w-12`} value={newLocSlot} onChange={e => setNewLocSlot(e.target.value)} placeholder="Slot" />

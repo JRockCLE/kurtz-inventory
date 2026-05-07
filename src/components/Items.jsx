@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useLocalItems, qry, fetchItemsForNeeds } from "../lib/hooks";
-import { fmt$, fmtDate, naturalCompare } from "../lib/helpers";
+import { fmt$, fmtDate, compareLocation, prefixColorClass } from "../lib/helpers";
 
 // Measure text width using an offscreen canvas
 const _canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
@@ -18,6 +18,7 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
   const [sortBy, setSortBy] = useState("name");
   const [sortDir, setSortDir] = useState("asc");
   const [page, setPage] = useState(0);
+  const [productType, setProductType] = useState(null); // null = All
   const [localTick, setLocalTick] = useState(0);
   const [locMap, setLocMap] = useState({}); // { itemId: [{ location, is_primary }] }
   const [showPrintMenu, setShowPrintMenu] = useState(false);
@@ -31,7 +32,7 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
   };
 
   const { items, total, loading, pageSize } = useLocalItems({
-    search, sortBy, sortDir, page, refreshTick: refreshTick + localTick,
+    search, sortBy, sortDir, page, productType, refreshTick: refreshTick + localTick,
   });
 
   const totalPages = Math.ceil(total / pageSize);
@@ -76,7 +77,8 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
     setPrintLoading(true);
     setShowPrintMenu(false);
     try {
-      const allItems = await fetchItemsForNeeds();
+      let allItems = await fetchItemsForNeeds();
+      if (productType) allItems = allItems.filter(i => i.product_type === productType);
 
       // Sort based on option
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -98,12 +100,8 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
           });
           break;
         case "wh_loc":
-          allItems.sort((a, b) => {
-            if (!a.warehouse_location && !b.warehouse_location) return 0;
-            if (!a.warehouse_location) return 1;
-            if (!b.warehouse_location) return -1;
-            return collator.compare(a.warehouse_location, b.warehouse_location) || (a.name || "").localeCompare(b.name || "");
-          });
+          allItems.sort((a, b) => compareLocation(a.warehouse_location, b.warehouse_location)
+            || (a.name || "").localeCompare(b.name || ""));
           break;
         case "store_loc":
           allItems.sort((a, b) => {
@@ -120,31 +118,16 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
       setTimeout(() => { window.print(); }, 300);
     } catch (err) { alert("Error loading items: " + err.message); }
     setPrintLoading(false);
-  }, [deptMap]);
-
-  const [whLocDetails, setWhLocDetails] = useState({}); // { label: { section, aisle } }
-
-  // Load warehouse location details (section/aisle) once
-  useEffect(() => {
-    qry("warehouse_locations", {
-      select: "label,section,aisle",
-      filters: "active_yn=eq.Y",
-      limit: 5000,
-    }).then(locs => {
-      const m = {};
-      locs.forEach(l => { m[l.label] = { section: l.section, aisle: l.aisle }; });
-      setWhLocDetails(m);
-    }).catch(() => {});
-  }, []);
+  }, [deptMap, productType]);
 
   // Fetch locations for displayed items
   useEffect(() => {
     if (!items.length) { setLocMap({}); return; }
     const ids = items.map(i => i.id).join(",");
     qry("local_item_locations", {
-      select: "local_item_id,location,is_primary",
+      select: "local_item_id,location,is_primary,sort_order",
       filters: `local_item_id=in.(${ids})`,
-      order: "is_primary.desc,location.asc",
+      order: "sort_order.asc,is_primary.desc,location.asc",
     }).then(locs => {
       const m = {};
       locs.forEach(l => {
@@ -193,11 +176,26 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
             </div>
           </div>
         </div>
-        <div className="relative max-w-md">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">🔍</span>
-          <input type="text" placeholder="Search by name or UPC..." value={searchInput}
-            onChange={e => handleSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+        <div className="flex items-center gap-3">
+          <div className="relative max-w-md flex-1">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">🔍</span>
+            <input type="text" placeholder="Search by name or UPC..." value={searchInput}
+              onChange={e => handleSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+          </div>
+          <div className="flex items-center gap-1.5">
+            {[
+              { v: null, label: "All", active: "bg-stone-700 text-white" },
+              { v: "dry", label: "Dry", active: "bg-amber-600 text-white" },
+              { v: "cooler", label: "Cooler", active: "bg-blue-600 text-white" },
+              { v: "freezer", label: "Freezer", active: "bg-green-600 text-white" },
+            ].map(c => (
+              <button key={c.label} onClick={() => { setProductType(c.v); setPage(0); }}
+                className={`px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide transition-colors ${productType === c.v ? c.active : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`}>
+                {c.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -207,7 +205,7 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
             <tr className="bg-stone-700 text-white text-[10px] font-bold uppercase tracking-wider">
               <th colSpan={5} className="px-2 py-1 text-left border-r border-stone-500/50">Item Info</th>
               <th colSpan={2} className="px-2 py-1 text-left border-r border-stone-500/50">Categorization</th>
-              <th colSpan={4} className="px-2 py-1 text-left border-r border-stone-500/50">Location</th>
+              <th colSpan={2} className="px-2 py-1 text-left border-r border-stone-500/50">Location</th>
               <th colSpan={3} className="px-2 py-1 text-left border-r border-stone-500/50">Pricing &amp; Stock</th>
               <th className="px-2 py-1 text-center w-[35px]"></th>
               <th className="bg-stone-700"></th>
@@ -222,9 +220,7 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
               <ColHead col="ref_unit_cd" className="text-left w-[50px] border-r border-stone-200">Unit</ColHead>
               <ColHead col="dept_id" className="text-left w-[90px]">Dept</ColHead>
               <ColHead col="category_id" className="text-left w-[100px] border-r border-stone-200">Category</ColHead>
-              <ColHead col="warehouse_location" className="text-left w-[80px]">WH Loc</ColHead>
-              <StaticHead className="text-left w-[70px]">Section</StaticHead>
-              <StaticHead className="text-left w-[70px]">Aisle</StaticHead>
+              <ColHead col="warehouse_location" className="text-left w-[160px]">WH Locations</ColHead>
               <ColHead col="store_location" className="text-left w-[80px] border-r border-stone-200">Store Loc</ColHead>
               <ColHead col="retail_price" className="text-center w-[65px]">Price</ColHead>
               <ColHead col="cases_on_hand" className="text-center w-[55px]">Cases</ColHead>
@@ -234,10 +230,10 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
             </tr>
           </thead>
           <tbody>
-            {loading ? (
-              <tr><td colSpan={16} className="px-4 py-8 text-center text-stone-400">Loading...</td></tr>
+            {loading && items.length === 0 ? (
+              <tr><td colSpan={14} className="px-4 py-8 text-center text-stone-400">Loading...</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={16} className="px-4 py-12 text-center text-stone-400">
+              <tr><td colSpan={14} className="px-4 py-12 text-center text-stone-400">
                 {search ? "No items match your search" : "No items in the system yet. Use the Receiving tab to add items."}
               </td></tr>
             ) : (
@@ -262,19 +258,17 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
                     <td className="px-3 py-1.5 text-xs text-stone-500 truncate border-r border-stone-100">{(item.category_id && catMap[item.category_id]) || "—"}</td>
                     {(() => {
                       const locs = locMap[item.id];
-                      const primaryLabel = locs?.length
-                        ? (locs.find(l => l.is_primary)?.location || locs[0].location)
-                        : item.warehouse_location;
-                      const extra = (locs?.length || 0) - 1;
-                      const detail = primaryLabel ? whLocDetails[primaryLabel] : null;
+                      const labels = locs?.length
+                        ? locs.map(l => l.location)
+                        : (item.warehouse_location ? [item.warehouse_location] : []);
                       return (
-                        <>
-                          <td className="px-3 py-1.5 text-xs font-medium text-amber-700">
-                            {primaryLabel || "—"}{extra > 0 && <span className="text-stone-400 font-normal ml-1" title={locs.map(l => l.location).join(", ")}>+{extra}</span>}
-                          </td>
-                          <td className="px-3 py-1.5 text-xs text-stone-500">{detail?.section || "—"}</td>
-                          <td className="px-3 py-1.5 text-xs text-stone-500">{detail?.aisle || "—"}</td>
-                        </>
+                        <td className="px-3 py-1.5 text-xs font-medium truncate" title={labels.join(" ")}>
+                          {labels.length === 0 ? "—" : (
+                            <span className="inline-flex gap-2">
+                              {labels.map((l, k) => <span key={k} className={prefixColorClass(l)}>{l}</span>)}
+                            </span>
+                          )}
+                        </td>
                       );
                     })()}
                     <td className="px-3 py-1.5 text-xs text-stone-500 border-r border-stone-100">{item.store_location || "—"}</td>

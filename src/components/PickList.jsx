@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { qry, SB_URL, SB_KEY } from "../lib/hooks";
-import { naturalCompare, fmtDate } from "../lib/helpers";
+import { qry, SB_URL, SB_KEY, addItemLocation, setPrimaryLocation } from "../lib/hooks";
+import { compareLocation, fmtDate } from "../lib/helpers";
 
 export default function PickList({ orderId, onBack, onUpdate, data }) {
   const [order, setOrder] = useState(null);
@@ -29,7 +29,7 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
       if (itemIds.length) {
         try {
           const li = await qry("local_items", {
-            select: "id,mfg_id,ref_unit_cd,expiration_date,size,name,warehouse_location",
+            select: "id,mfg_id,ref_unit_cd,expiration_date,size,name,warehouse_location,product_type",
             filters: `id=in.(${itemIds.join(",")})`,
           });
           // Resolve mfg names
@@ -75,6 +75,7 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
           x._mfg_name = li._mfg_name;
           x._ref_unit_cd = li.ref_unit_cd;
           x._expiration_date = li.expiration_date;
+          x._product_type = li.product_type;
           const locs = li._locations || [];
           const primary = locs.find(l => l.is_primary)?.location || locs[0]?.location || li.warehouse_location;
           if (!x.warehouse_location) x.warehouse_location = primary;
@@ -86,7 +87,7 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
         }
       });
 
-      i.sort((a, b) => naturalCompare(a.warehouse_location, b.warehouse_location) || (a.item_name || "").localeCompare(b.item_name || ""));
+      i.sort((a, b) => compareLocation(a.warehouse_location, b.warehouse_location) || (a.item_name || "").localeCompare(b.item_name || ""));
       setItems(i);
       const m = {};
       locs.forEach(l => { m[l.label] = { section: l.section, aisle: l.aisle }; });
@@ -134,7 +135,58 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
     qry("local_items", { update, match: { id: item.item_id } }).catch(console.error);
     if (field === "warehouse_location") {
       qry("store_order_items", { update: { warehouse_location: value || null }, match: { id: item.id } }).catch(console.error);
+      syncPrimaryLocationRow(item.item_id, value).catch(console.error);
     }
+  };
+
+  const syncPrimaryLocationRow = async (localItemId, newLabel) => {
+    const rows = await qry("local_item_locations", {
+      select: "id,location,is_primary",
+      filters: `local_item_id=eq.${localItemId}`,
+    });
+    const primary = rows.find(r => r.is_primary);
+    const trimmed = (newLabel || "").trim();
+    if (primary) {
+      if (!trimmed) {
+        await qry("local_item_locations", { del: true, match: { id: primary.id } });
+        const remaining = rows.filter(r => r.id !== primary.id);
+        if (remaining.length) await setPrimaryLocation(remaining[0].id);
+      } else if (primary.location !== trimmed) {
+        await qry("local_item_locations", {
+          update: { location: trimmed, updated_at: new Date().toISOString() },
+          match: { id: primary.id },
+        });
+      }
+    } else if (trimmed) {
+      try { await addItemLocation(localItemId, trimmed, true); } catch { /* dup */ }
+    }
+  };
+
+  const updateAdditionalLocations = async (item, csv) => {
+    if (!item.item_id) return;
+    const desired = [...new Set(csv.split(",").map(s => s.trim()).filter(Boolean))]
+      .filter(l => l !== (item.warehouse_location || ""));
+
+    // Optimistic local update
+    setItems(prev => prev.map(it => it.id === item.id ? { ...it, _additional_locations: desired } : it));
+
+    try {
+      const rows = await qry("local_item_locations", {
+        select: "id,location,is_primary",
+        filters: `local_item_id=eq.${item.item_id}`,
+      });
+      const currentNonPrimary = rows.filter(r => !r.is_primary);
+      const toRemove = currentNonPrimary.filter(r => !desired.includes(r.location));
+      const existingNames = currentNonPrimary.map(r => r.location);
+      const toAdd = desired.filter(name => !existingNames.includes(name));
+
+      for (const r of toRemove) {
+        await qry("local_item_locations", { del: true, match: { id: r.id } });
+      }
+      for (const name of toAdd) {
+        try { await addItemLocation(item.item_id, name, false); } catch { /* dup */ }
+      }
+    } catch (err) { console.error(err); }
   };
 
   const statusLabels = { submitted: "Needs Picked", picking: "In Progress", completed: "Completed" };
@@ -144,6 +196,16 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
     completed: "bg-green-100 text-green-800",
   };
   const isEditable = order?.status === "picking";
+
+  const typeBadge = useMemo(() => {
+    const types = [...new Set(items.map(i => i._product_type).filter(Boolean))];
+    if (types.length === 0) return null;
+    if (types.length > 1) return { label: "Mixed", cls: "bg-stone-200 text-stone-700" };
+    const t = types[0];
+    if (t === "cooler") return { label: "Cooler", cls: "bg-blue-100 text-blue-800" };
+    if (t === "freezer") return { label: "Freezer", cls: "bg-green-100 text-green-800" };
+    return { label: "Dry", cls: "bg-amber-100 text-amber-800" };
+  }, [items]);
 
   if (loading || !order) return <div className="p-8 text-center text-stone-400">Loading...</div>;
 
@@ -179,6 +241,9 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusColors[order.status] || "bg-stone-100 text-stone-600"}`}>
             {statusLabels[order.status] || order.status}
           </span>
+          {typeBadge && (
+            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${typeBadge.cls}`}>{typeBadge.label}</span>
+          )}
           <span className="text-xs text-stone-400">{new Date(order.created_at).toLocaleString()}</span>
           {order.status === "submitted" && (
             <span className="text-xs text-stone-500 italic">Print to begin picking</span>
@@ -193,7 +258,7 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
         <div className="flex justify-between items-end border-b-2 border-stone-800 pb-2 mb-1">
           <div>
             <h1 className="text-xl font-black">WAREHOUSE PICK LIST</h1>
-            <p className="text-sm">Order #{order.id} — {items.length} items</p>
+            <p className="text-sm">Order #{order.id} — {items.length} items{typeBadge && ` — ${typeBadge.label}`}</p>
           </div>
           <div className="text-right text-sm">
             <p className="font-bold">{new Date(order.created_at).toLocaleDateString()}</p>
@@ -268,7 +333,18 @@ export default function PickList({ orderId, onBack, onUpdate, data }) {
                 ) : (
                   <div className="px-2 py-2 text-center border-r border-stone-100 font-bold text-stone-800">{item.warehouse_location || "—"}</div>
                 )}
-                <div className="px-2 py-2 text-center border-r border-stone-100 text-stone-600 text-xs truncate" title={item._additional_locations?.join(", ") || ""}>{item._additional_locations?.length ? item._additional_locations.join(", ") : ""}</div>
+                {isEditable ? (
+                  <div className="px-1 py-1 border-r border-stone-100">
+                    <input type="text" defaultValue={item._additional_locations?.join(", ") || ""}
+                      onBlur={e => {
+                        const cur = item._additional_locations?.join(", ") || "";
+                        if (e.target.value.trim() !== cur.trim()) updateAdditionalLocations(item, e.target.value);
+                      }}
+                      className="w-full text-center px-1 py-1 text-xs border border-stone-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                  </div>
+                ) : (
+                  <div className="px-2 py-2 text-center border-r border-stone-100 text-stone-600 text-xs truncate" title={item._additional_locations?.join(", ") || ""}>{item._additional_locations?.length ? item._additional_locations.join(", ") : ""}</div>
+                )}
                 <div className="px-2 py-2 border-r border-stone-100 truncate text-stone-500 text-xs">{item._mfg_name || "—"}</div>
                 <div className={`px-2 py-2 border-r border-stone-100 truncate font-medium ${item.picked_yn ? "line-through text-stone-400" : "text-stone-800"}`}>{item.item_name}</div>
                 <div className="px-2 py-2 text-center border-r border-stone-100 text-stone-500 text-xs">{sizeUnit || "—"}</div>

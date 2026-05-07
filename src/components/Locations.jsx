@@ -1,16 +1,41 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { qry } from "../lib/hooks";
-import { naturalCompare } from "../lib/helpers";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { qry, SB_URL, SB_KEY } from "../lib/hooks";
+import { compareLocation, splitLocation, naturalCompare, prefixColorClass } from "../lib/helpers";
+
+async function fetchAllLocations() {
+  const all = [];
+  const batch = 1000;
+  let offset = 0;
+  const headers = {
+    apikey: SB_KEY,
+    Authorization: `Bearer ${SB_KEY}`,
+    "Accept-Profile": "public",
+  };
+  while (true) {
+    const res = await fetch(
+      `${SB_URL}/rest/v1/warehouse_locations?active_yn=eq.Y&select=*&order=label.asc`,
+      { headers: { ...headers, Range: `${offset}-${offset + batch - 1}` } }
+    );
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) break;
+    all.push(...data);
+    if (data.length < batch) break;
+    offset += batch;
+  }
+  return all;
+}
 
 export default function Locations() {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState("column_num");
+  const [sortBy, setSortBy] = useState("prefix");
   const [sortDir, setSortDir] = useState("asc");
+  const [prefixFilter, setPrefixFilter] = useState(null); // null=All, "", "C", "F"
 
   // Add form
   const [showAdd, setShowAdd] = useState(false);
+  const [addPrefix, setAddPrefix] = useState("");
   const [addSection, setAddSection] = useState("");
   const [addRow, setAddRow] = useState("");
   const [addSlot, setAddSlot] = useState("");
@@ -21,6 +46,7 @@ export default function Locations() {
 
   // Bulk add
   const [showBulk, setShowBulk] = useState(false);
+  const [bulkPrefix, setBulkPrefix] = useState("");
   const [bulkSecStart, setBulkSecStart] = useState("");
   const [bulkSecEnd, setBulkSecEnd] = useState("");
   const [bulkRows, setBulkRows] = useState("A,B,C,D");
@@ -32,13 +58,13 @@ export default function Locations() {
   const [editCell, setEditCell] = useState(null); // { id, field }
   const [editVal, setEditVal] = useState("");
 
+  const initialLoaded = useRef(false);
   const load = useCallback(() => {
-    setLoading(true);
-    qry("warehouse_locations", {
-      select: "*", filters: "active_yn=eq.Y",
-      order: `${sortBy}.${sortDir}.nullslast`, limit: 5000,
-    }).then(setLocations).catch(console.error).finally(() => setLoading(false));
-  }, [sortBy, sortDir]);
+    if (!initialLoaded.current) setLoading(true);
+    fetchAllLocations()
+      .then(d => { setLocations(d); initialLoaded.current = true; })
+      .catch(console.error).finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -50,12 +76,38 @@ export default function Locations() {
           l.aisle?.toLowerCase().includes(search.toLowerCase()) ||
           l.notes?.toLowerCase().includes(search.toLowerCase()))
       : locations;
-    if (sortBy === "label") {
-      list = [...list].sort((a, b) => naturalCompare(a.label, b.label));
-      if (sortDir === "desc") list.reverse();
+    if (prefixFilter !== null) {
+      list = list.filter(l => splitLocation(l.label).prefix === prefixFilter);
     }
+
+    const cmpStr = (a, b) => naturalCompare(a, b);
+    const cmpNum = (a, b) => {
+      const av = a == null ? Infinity : a;
+      const bv = b == null ? Infinity : b;
+      return av - bv;
+    };
+
+    let cmp;
+    if (sortBy === "label") cmp = (a, b) => compareLocation(a.label, b.label);
+    else if (sortBy === "prefix") {
+      cmp = (a, b) => {
+        const pa = splitLocation(a.label).prefix;
+        const pb = splitLocation(b.label).prefix;
+        if (pa !== pb) return pa.localeCompare(pb);
+        const c = cmpNum(a.column_num, b.column_num);
+        if (c) return c;
+        const r = (a.row_letter || "").localeCompare(b.row_letter || "");
+        if (r) return r;
+        return cmpNum(a.slot_num, b.slot_num);
+      };
+    }
+    else if (sortBy === "column_num" || sortBy === "slot_num") cmp = (a, b) => cmpNum(a[sortBy], b[sortBy]);
+    else cmp = (a, b) => cmpStr(a[sortBy], b[sortBy]);
+
+    list = [...list].sort(cmp);
+    if (sortDir === "desc") list.reverse();
     return list;
-  }, [locations, search, sortBy, sortDir]);
+  }, [locations, search, sortBy, sortDir, prefixFilter]);
 
   const toggleSort = (col) => {
     if (sortBy === col) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -63,9 +115,9 @@ export default function Locations() {
   };
   const arrow = (col) => sortBy === col ? (sortDir === "asc" ? " ↑" : " ↓") : "";
 
-  const makeLabel = (section, row, slot) => {
-    const base = `${section}${row.toUpperCase()}`;
-    return slot ? `${base}-${slot}` : base;
+  const makeLabel = (prefix, section, row, slot) => {
+    const base = `${section}${row.toUpperCase()}${slot ? `-${slot}` : ""}`;
+    return prefix ? `${prefix}-${base}` : base;
   };
 
   const addOne = async () => {
@@ -74,6 +126,7 @@ export default function Locations() {
     try {
       await qry("warehouse_locations", {
         insert: {
+          label: makeLabel(addPrefix, addSection, addRow, addSlot),
           column_num: parseInt(addSection),
           row_letter: addRow.toUpperCase().trim(),
           slot_num: addSlot ? parseInt(addSlot) : null,
@@ -82,7 +135,7 @@ export default function Locations() {
           notes: addNotes.trim() || null,
         },
       });
-      setAddSection(""); setAddRow(""); setAddSlot(""); setAddWhSection(""); setAddAisle(""); setAddNotes("");
+      setAddPrefix(""); setAddSection(""); setAddRow(""); setAddSlot(""); setAddWhSection(""); setAddAisle(""); setAddNotes("");
       load();
     } catch (err) { alert("Error: " + err.message); }
     setSaving(false);
@@ -99,7 +152,9 @@ export default function Locations() {
       let sortIdx = 0;
       for (let sec = start; sec <= end; sec++) {
         for (const row of rows) {
+          const base = `${sec}${row}`;
           locs.push({
+            label: bulkPrefix ? `${bulkPrefix}-${base}` : base,
             column_num: sec,
             row_letter: row,
             section: bulkWhSection.trim() || null,
@@ -112,7 +167,7 @@ export default function Locations() {
         await qry("warehouse_locations", { insert: locs.slice(i, i + 100) });
       }
       setShowBulk(false);
-      setBulkSecStart(""); setBulkSecEnd(""); setBulkRows("A,B,C,D"); setBulkWhSection(""); setBulkAisle("");
+      setBulkPrefix(""); setBulkSecStart(""); setBulkSecEnd(""); setBulkRows("A,B,C,D"); setBulkWhSection(""); setBulkAisle("");
       load();
     } catch (err) { alert("Error: " + err.message); }
     setBulkSaving(false);
@@ -128,6 +183,17 @@ export default function Locations() {
     const { id, field } = editCell;
     const val = editVal.trim();
     const updates = {};
+
+    if (field === "prefix") {
+      const oldPrefix = splitLocation(loc.label).prefix;
+      if (val === oldPrefix) { setEditCell(null); return; }
+      const rest = splitLocation(loc.label).rest;
+      updates.label = val ? `${val}-${rest}` : rest;
+      setEditCell(null);
+      await qry("warehouse_locations", { update: updates, match: { id } });
+      load();
+      return;
+    }
 
     if (field === "column_num") {
       if (!val) return;
@@ -149,6 +215,15 @@ export default function Locations() {
     const oldVal = String(loc[field] ?? "");
     if (val === oldVal) { setEditCell(null); return; }
 
+    // If a label component changed, recompute label (DB column no longer auto-generates)
+    if (field === "column_num" || field === "row_letter" || field === "slot_num") {
+      const c = field === "column_num" ? parseInt(val) : loc.column_num;
+      const r = field === "row_letter" ? val.toUpperCase() : (loc.row_letter || "");
+      const s = field === "slot_num" ? (val ? parseInt(val) : null) : loc.slot_num;
+      const prefix = splitLocation(loc.label).prefix;
+      updates.label = `${prefix ? prefix + "-" : ""}${c}${r}${s != null ? "-" + s : ""}`;
+    }
+
     setEditCell(null);
     await qry("warehouse_locations", { update: updates, match: { id } });
     load();
@@ -169,7 +244,7 @@ export default function Locations() {
       onClick={() => toggleSort(col)}>{children}{arrow(col)}</th>
   );
 
-  const previewLabel = addSection && addRow ? makeLabel(addSection, addRow, addSlot) : "—";
+  const previewLabel = addSection && addRow ? makeLabel(addPrefix, addSection, addRow, addSlot) : "—";
 
   return (
     <div className="flex flex-col h-full">
@@ -191,11 +266,26 @@ export default function Locations() {
             </button>
           </div>
         </div>
-        <div className="relative max-w-md">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">🔍</span>
-          <input type="text" placeholder="Search locations..." value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+        <div className="flex items-center gap-3">
+          <div className="relative max-w-md flex-1">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">🔍</span>
+            <input type="text" placeholder="Search locations..." value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+          </div>
+          <div className="flex items-center gap-1.5">
+            {[
+              { v: null, label: "All", active: "bg-stone-700 text-white" },
+              { v: "", label: "Dry", active: "bg-amber-600 text-white" },
+              { v: "C", label: "Cooler", active: "bg-blue-600 text-white" },
+              { v: "F", label: "Freezer", active: "bg-green-600 text-white" },
+            ].map(c => (
+              <button key={c.label} onClick={() => setPrefixFilter(c.v)}
+                className={`px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide transition-colors ${prefixFilter === c.v ? c.active : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`}>
+                {c.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -203,6 +293,14 @@ export default function Locations() {
       {showAdd && (
         <div className="bg-amber-50 border-b border-amber-200 px-4 py-3">
           <div className="flex items-end gap-3 max-w-4xl flex-wrap">
+            <div>
+              <label className={lc}>Prefix</label>
+              <select className={`${ic} w-24`} value={addPrefix} onChange={e => setAddPrefix(e.target.value)}>
+                <option value="">None</option>
+                <option value="C">C (Cooler)</option>
+                <option value="F">F (Freezer)</option>
+              </select>
+            </div>
             <div>
               <label className={lc}>Section # *</label>
               <input type="number" className={`${ic} w-20`} value={addSection} onChange={e => setAddSection(e.target.value)} placeholder="1" />
@@ -244,6 +342,14 @@ export default function Locations() {
           <div className="text-sm font-bold text-blue-800 mb-2">Bulk Add Locations</div>
           <div className="flex items-end gap-3 max-w-4xl flex-wrap">
             <div>
+              <label className={lc}>Prefix</label>
+              <select className={`${ic} w-24`} value={bulkPrefix} onChange={e => setBulkPrefix(e.target.value)}>
+                <option value="">None</option>
+                <option value="C">C (Cooler)</option>
+                <option value="F">F (Freezer)</option>
+              </select>
+            </div>
+            <div>
               <label className={lc}>Section Start *</label>
               <input type="number" className={`${ic} w-20`} value={bulkSecStart} onChange={e => setBulkSecStart(e.target.value)} placeholder="1" />
             </div>
@@ -275,7 +381,13 @@ export default function Locations() {
           </div>
           <div className="text-[10px] text-blue-600 mt-1">
             Preview: {bulkSecStart && bulkSecEnd && bulkRows
-              ? `${bulkSecStart}${bulkRows.split(",")[0]?.trim()}, ${bulkSecStart}${bulkRows.split(",")[1]?.trim() || "?"}, ... ${bulkSecEnd}${bulkRows.split(",").pop()?.trim()}`
+              ? (() => {
+                  const p = bulkPrefix ? `${bulkPrefix}-` : "";
+                  const r0 = bulkRows.split(",")[0]?.trim();
+                  const r1 = bulkRows.split(",")[1]?.trim() || "?";
+                  const rL = bulkRows.split(",").pop()?.trim();
+                  return `${p}${bulkSecStart}${r0}, ${p}${bulkSecStart}${r1}, ... ${p}${bulkSecEnd}${rL}`;
+                })()
               : "Fill in fields to preview"}
           </div>
         </div>
@@ -286,12 +398,13 @@ export default function Locations() {
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 z-10">
             <tr className="bg-stone-700 text-white text-[10px] font-bold uppercase tracking-wider">
-              <th colSpan={4} className="px-2 py-1 text-left border-r border-stone-500/50">Location</th>
+              <th colSpan={5} className="px-2 py-1 text-left border-r border-stone-500/50">Location</th>
               <th colSpan={2} className="px-2 py-1 text-left border-r border-stone-500/50">Warehouse</th>
               <th colSpan={2} className="px-2 py-1 text-left">Details</th>
             </tr>
             <tr className="bg-stone-100 border-b border-stone-300">
               <ColHead col="label" className="text-left w-[100px]">Label</ColHead>
+              <ColHead col="prefix" className="text-center w-[70px]">Prefix</ColHead>
               <ColHead col="column_num" className="text-center w-[80px]">Section #</ColHead>
               <ColHead col="row_letter" className="text-center w-[60px]">Row</ColHead>
               <ColHead col="slot_num" className="text-center w-[60px] border-r border-stone-200">Slot</ColHead>
@@ -303,9 +416,9 @@ export default function Locations() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-stone-400">Loading...</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-stone-400">Loading...</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={8} className="px-4 py-12 text-center text-stone-400">
+              <tr><td colSpan={9} className="px-4 py-12 text-center text-stone-400">
                 {search ? "No locations match your search" : "No locations yet. Click '+ Add Location' or 'Bulk Add' to get started."}
               </td></tr>
             ) : (
@@ -326,9 +439,27 @@ export default function Locations() {
                     )}
                   </td>
                 );
+                const prefixVal = splitLocation(loc.label).prefix;
                 return (
                   <tr key={loc.id} className={`border-b border-stone-100 ${i % 2 ? "bg-stone-50/40" : "bg-white"}`}>
-                    <td className="px-3 py-2 font-bold text-amber-700 font-mono">{loc.label}</td>
+                    <td className={`px-3 py-2 font-bold font-mono ${prefixColorClass(loc.label)}`}>{loc.label}</td>
+                    <td className="px-1 py-0.5" onClick={() => !isActive("prefix") && startCellEdit(loc.id, "prefix", prefixVal)}>
+                      {isActive("prefix") ? (
+                        <select className={`${inlineIc} w-full text-center`}
+                          value={editVal} onChange={e => setEditVal(e.target.value)}
+                          onBlur={() => saveCellEdit(loc)}
+                          onKeyDown={e => { if (e.key === "Enter") saveCellEdit(loc); if (e.key === "Escape") setEditCell(null); }}
+                          autoFocus>
+                          <option value="">None</option>
+                          <option value="C">C</option>
+                          <option value="F">F</option>
+                        </select>
+                      ) : (
+                        <div className={`px-2 py-1.5 rounded cursor-pointer hover:bg-amber-50 text-xs text-center font-bold ${prefixVal === "C" ? "text-blue-600" : prefixVal === "F" ? "text-cyan-600" : "text-stone-300"}`}>
+                          {prefixVal || "—"}
+                        </div>
+                      )}
+                    </td>
                     <Cell field="column_num" value={loc.column_num} type="number" align="center" />
                     <Cell field="row_letter" value={loc.row_letter} align="center" />
                     <Cell field="slot_num" value={loc.slot_num} type="number" align="center" className="border-r border-stone-100" />

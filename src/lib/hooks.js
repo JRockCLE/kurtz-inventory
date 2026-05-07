@@ -87,7 +87,7 @@ export async function checkBarcodeInSystem(barcode) {
   if (!barcode || barcode.length < 3) return [];
   try {
     const items = await qry("local_items", {
-      select: "id,name,size,upc,warehouse_location,cases_on_hand,expiration_date,case_size,retail_price,mfg_id,cost,dept_id,category_id,sub_category_id,photos,default_photo",
+      select: "id,name,size,upc,warehouse_location,cases_on_hand,expiration_date,case_size,retail_price,mfg_id,cost,dept_id,category_id,sub_category_id,photos,default_photo,product_type",
       filters: `upc=eq.${encodeURIComponent(barcode)}&active_yn=eq.Y`,
       order: "name.asc",
       limit: 50,
@@ -139,17 +139,17 @@ export async function checkBarcodeInSystem(barcode) {
 }
 
 // ─── Item location helpers ───
-export async function addItemLocation(localItemId, location, isPrimary = false) {
+export async function addItemLocation(localItemId, location, isPrimary = false, sortOrder = 0) {
   return qry("local_item_locations", {
-    insert: { local_item_id: localItemId, location, is_primary: isPrimary },
+    insert: { local_item_id: localItemId, location, is_primary: isPrimary, sort_order: sortOrder },
   });
 }
 
 export async function getItemLocations(localItemId) {
   return qry("local_item_locations", {
-    select: "id,location,is_primary",
+    select: "id,location,is_primary,sort_order",
     filters: `local_item_id=eq.${localItemId}`,
-    order: "is_primary.desc,location.asc",
+    order: "sort_order.asc,is_primary.desc,location.asc",
   });
 }
 
@@ -159,6 +159,10 @@ export async function setPrimaryLocation(locationRowId) {
     update: { is_primary: true, updated_at: new Date().toISOString() },
     match: { id: locationRowId },
   });
+}
+
+export async function removeItemLocation(locationRowId) {
+  return qry("local_item_locations", { del: true, match: { id: locationRowId } });
 }
 
 // ─── Vendor search (for manufacturer typeahead) ───
@@ -192,7 +196,7 @@ export function useRefData() {
 }
 
 // ─── Local Items (what's in OUR system) ───
-export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", page = 0, colFilters = {}, refreshTick = 0 } = {}) {
+export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", page = 0, colFilters = {}, productType = null, refreshTick = 0 } = {}) {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -209,6 +213,7 @@ export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", p
     if (cf.name) filters.push(`name=ilike.*${cf.name}*`);
     if (cf.size) filters.push(`size=ilike.*${cf.size}*`);
     if (cf.warehouse_location) filters.push(`warehouse_location=ilike.*${cf.warehouse_location}*`);
+    if (productType) filters.push(`product_type=eq.${productType}`);
 
     const filterStr = filters.join("&");
     const needsNaturalSort = sortBy === "warehouse_location";
@@ -227,15 +232,22 @@ export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", p
       let data = await res.json();
       if (!Array.isArray(data)) data = [];
 
-      // Natural sort + client-side pagination for warehouse_location
+      // Prefix-aware sort + client-side pagination for warehouse_location
       if (needsNaturalSort) {
+        const splitLoc = (s) => {
+          if (s == null) return null;
+          const v = String(s);
+          if (v.length >= 2 && v[1] === "-" && /[A-Za-z]/.test(v[0])) return { prefix: v[0].toUpperCase(), rest: v.slice(2) };
+          return { prefix: "", rest: v };
+        };
         const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
         data.sort((a, b) => {
-          const av = a.warehouse_location, bv = b.warehouse_location;
-          if (av == null && bv == null) return 0;
-          if (av == null) return 1;
-          if (bv == null) return -1;
-          return collator.compare(String(av), String(bv));
+          const sa = splitLoc(a.warehouse_location), sb = splitLoc(b.warehouse_location);
+          if (sa == null && sb == null) return 0;
+          if (sa == null) return 1;
+          if (sb == null) return -1;
+          if (sa.prefix !== sb.prefix) return sa.prefix.localeCompare(sb.prefix);
+          return collator.compare(sa.rest, sb.rest);
         });
         if (sortDir === "desc") data.reverse();
         setTotal(data.length);
@@ -260,7 +272,7 @@ export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", p
       setItems(list);
     }).catch(err => { console.error(err); setItems([]); })
       .finally(() => setLoading(false));
-  }, [search, sortBy, sortDir, page, cfKey, refreshTick]);
+  }, [search, sortBy, sortDir, page, cfKey, productType, refreshTick]);
 
   return { items, total, loading, pageSize: PAGE_SIZE };
 }
@@ -278,6 +290,48 @@ export function useOrders() {
   return { orders, loading, refresh };
 }
 
+// ─── For each order id, return "dry" | "cooler" | "freezer" | "mixed" ───
+export async function fetchOrderTypes(orderIds) {
+  if (!orderIds.length) return {};
+  const headers = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Accept-Profile": "public" };
+  const all = [];
+  const batch = 1000;
+  let offset = 0;
+  while (true) {
+    const res = await fetch(
+      `${SB_URL}/rest/v1/store_order_items?order_id=in.(${orderIds.join(",")})&select=order_id,item_id`,
+      { headers: { ...headers, Range: `${offset}-${offset + batch - 1}` } }
+    );
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) break;
+    all.push(...data);
+    if (data.length < batch) break;
+    offset += batch;
+  }
+  const itemIds = [...new Set(all.map(r => r.item_id).filter(Boolean))];
+  let typeById = {};
+  if (itemIds.length) {
+    const items = await qry("local_items", {
+      select: "id,product_type",
+      filters: `id=in.(${itemIds.join(",")})`,
+    });
+    typeById = Object.fromEntries(items.map(i => [i.id, i.product_type]));
+  }
+  const setsByOrder = {};
+  all.forEach(r => {
+    const t = typeById[r.item_id];
+    if (!t) return;
+    if (!setsByOrder[r.order_id]) setsByOrder[r.order_id] = new Set();
+    setsByOrder[r.order_id].add(t);
+  });
+  const summary = {};
+  Object.keys(setsByOrder).forEach(oid => {
+    const types = [...setsByOrder[oid]];
+    summary[oid] = types.length > 1 ? "mixed" : types[0];
+  });
+  return summary;
+}
+
 // ─── Fetch all local items for Store Needs print ───
 export async function fetchItemsForNeeds() {
   const allItems = [];
@@ -285,7 +339,7 @@ export async function fetchItemsForNeeds() {
   const batchSize = 1000;
   while (true) {
     const res = await fetch(
-      `${SB_URL}/rest/v1/local_items?active_yn=eq.Y&select=id,name,size,upc,retail_price,cases_on_hand,warehouse_location,store_location,expiration_date,dept_id,category_id,mfg_id,case_size,ref_unit_cd&order=store_location.asc.nullslast,name.asc`,
+      `${SB_URL}/rest/v1/local_items?active_yn=eq.Y&select=id,name,size,upc,retail_price,cases_on_hand,warehouse_location,store_location,expiration_date,dept_id,category_id,mfg_id,case_size,ref_unit_cd,product_type&order=store_location.asc.nullslast,name.asc`,
       { headers: { ...sbH("public"), Range: `${offset}-${offset + batchSize - 1}` } }
     );
     const data = await res.json();
@@ -363,9 +417,17 @@ export async function searchLocations(typed) {
     filters: `${filter}active_yn=eq.Y`,
     limit: 100,
   });
-  // Natural sort so 2A < 13A
+  // Prefix-aware natural sort so dry/cooler/freezer group, and 2A < 13A within each
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-  data.sort((a, b) => collator.compare(a.label || "", b.label || ""));
+  const split = (s) => {
+    const v = String(s || "");
+    if (v.length >= 2 && v[1] === "-" && /[A-Za-z]/.test(v[0])) return [v[0].toUpperCase(), v.slice(2)];
+    return ["", v];
+  };
+  data.sort((a, b) => {
+    const [pa, ra] = split(a.label), [pb, rb] = split(b.label);
+    return pa.localeCompare(pb) || collator.compare(ra, rb);
+  });
   const ctx = (l) => [l.section, l.aisle].filter(Boolean).join(" / ");
   return data.map(l => ({ value: l.label, label: l.label + (ctx(l) ? `  —  ${ctx(l)}` : "") }));
 }

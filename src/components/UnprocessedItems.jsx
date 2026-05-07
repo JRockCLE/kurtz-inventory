@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, addItemLocation } from "../lib/hooks";
+import { splitLocation } from "../lib/helpers";
 import SearchSelect from "./SearchSelect";
+
+const TYPE_TO_PREFIX = { dry: "", cooler: "C", freezer: "F" };
+const PREFIX_TO_TYPE = { "": "Dry", "C": "Cooler", "F": "Freezer" };
 
 export default function UnprocessedItems() {
   const [items, setItems] = useState([]);
@@ -29,7 +33,7 @@ export default function UnprocessedItems() {
     dept_id: "", dept_name: "", category_id: "", category_name: "",
     sub_category_id: "", sub_category_name: "", retail_price: "",
     case_cost: "", case_size: "", expiration_date: "", warehouse_location: "",
-    notes: "",
+    notes: "", product_type: "",
   });
 
   const [f, setF] = useState(emptyForm());
@@ -74,7 +78,26 @@ export default function UnprocessedItems() {
 
   // ─── Add item to system and mark processed ───
   const addItem = async () => {
-    if (!current || !f.name.trim()) return;
+    if (!current || !f.name.trim() || !f.product_type) return;
+
+    // Warn if product type and location prefix disagree
+    const loc = f.warehouse_location.trim();
+    if (loc) {
+      const locPrefix = splitLocation(loc).prefix;
+      const expectedPrefix = TYPE_TO_PREFIX[f.product_type];
+      if (locPrefix !== expectedPrefix) {
+        const locType = PREFIX_TO_TYPE[locPrefix] || `"${locPrefix}-" prefix`;
+        const itemType = f.product_type.charAt(0).toUpperCase() + f.product_type.slice(1);
+        const ok = confirm(
+          `Type/location mismatch:\n\n` +
+          `• Item type: ${itemType}\n` +
+          `• Location "${loc}" looks like: ${locType}\n\n` +
+          `Add anyway?`
+        );
+        if (!ok) return;
+      }
+    }
+
     setSaving(true);
     try {
       // Create the local item
@@ -98,6 +121,7 @@ export default function UnprocessedItems() {
           expiration_date: f.expiration_date || null,
           warehouse_location: f.warehouse_location.trim() || null,
           notes: f.notes.trim() || null,
+          product_type: f.product_type,
           photos: itemPhotos,
           default_photo: itemPhotos[0] || null,
           sync_status: "local",
@@ -277,6 +301,24 @@ export default function UnprocessedItems() {
               Add Item to System
             </div>
 
+            {/* Type (required) */}
+            <div className="flex items-center gap-3">
+              <span className={`${lc} mb-0`}>Type *</span>
+              <div className="flex gap-1.5">
+                {[
+                  { v: "dry", label: "Dry" },
+                  { v: "cooler", label: "Cooler" },
+                  { v: "freezer", label: "Freezer" },
+                ].map(o => (
+                  <button key={o.v} type="button" onClick={() => set("product_type", o.v)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${f.product_type === o.v ? "bg-amber-600 text-white" : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`}>
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              {!f.product_type && <span className="text-[11px] text-red-500 italic">required</span>}
+            </div>
+
             {/* Mfg + Item Name */}
             <div className="grid grid-cols-[200px_1fr] gap-3">
               <div>
@@ -357,7 +399,7 @@ export default function UnprocessedItems() {
 
             {/* Submit */}
             <div className="flex gap-3 pt-3 border-t border-stone-200">
-              <button onClick={addItem} disabled={saving || !f.name.trim()}
+              <button onClick={addItem} disabled={saving || !f.name.trim() || !f.product_type}
                 className="px-6 py-2.5 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
                 {saving ? "Adding..." : "Add Item"}
               </button>

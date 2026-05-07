@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, uploadPhoto, SB_URL, SB_KEY } from "../lib/hooks";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, uploadPhoto, addItemLocation, getItemLocations, removeItemLocation, SB_URL, SB_KEY } from "../lib/hooks";
 import SearchSelect from "./SearchSelect";
 const sbH = (schema = "posbe") => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Accept-Profile": schema, "Content-Profile": schema, "Content-Type": "application/json" });
 
@@ -62,6 +62,7 @@ function normalizeItem(item, vendorMap, deptMap, catMap) {
       warehouse_location: item.warehouse_location || "",
       store_location: item.store_location || "",
       notes: item.notes || "",
+      product_type: item.product_type || "dry",
       localId: item._localId || item.localId || item.id || null,
       source: "local",
     };
@@ -124,6 +125,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
     warehouse_location: normalized.warehouse_location || "",
     store_location: normalized.store_location || "",
     notes: normalized.notes || "",
+    product_type: normalized.product_type || "dry",
   });
 
   // Photos
@@ -241,6 +243,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
         warehouse_location: f.warehouse_location.trim() || null,
         store_location: f.store_location.trim() || null,
         notes: f.notes.trim() || null,
+        product_type: f.product_type || "dry",
         photos: allPhotos,
         default_photo: defPhoto,
         updated_at: new Date().toISOString(),
@@ -361,6 +364,14 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
               <div className="w-[170px] shrink-0">
                 <label className={lc}>Expiration Date</label><input type="date" className={ic} value={f.expiration_date} onChange={e => set("expiration_date", e.target.value)} />
               </div>
+              <div className="w-[130px] shrink-0">
+                <label className={lc}>Type</label>
+                <select className={ic} value={f.product_type} onChange={e => set("product_type", e.target.value)}>
+                  <option value="dry">Dry</option>
+                  <option value="cooler">Cooler</option>
+                  <option value="freezer">Freezer</option>
+                </select>
+              </div>
               <div className="flex-1" />
             </div>
           </div>
@@ -415,13 +426,20 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div><label className={lc}>Cases On Hand</label><input type="number" className={ic} value={f.cases_on_hand} onChange={e => set("cases_on_hand", e.target.value)} placeholder="0" /></div>
               <div>
-                <label className={lc}>Warehouse Location</label>
-                <SearchSelect value={f.warehouse_location} displayValue={f.warehouse_location}
-                  fetchOptions={searchLocations}
-                  onSelect={(v) => set("warehouse_location", v || "")}
-                  placeholder="Type to search..." />
-                <button type="button" onClick={() => set("_showLocModal", true)}
-                  className="text-[11px] text-amber-600 hover:text-amber-700 font-medium mt-1">+ Add new location</button>
+                <label className={lc}>Warehouse Locations</label>
+                {isEdit && normalized.localId ? (
+                  <LocationsManager localItemId={normalized.localId}
+                    onPrimaryChange={(label) => set("warehouse_location", label || "")} />
+                ) : (
+                  <>
+                    <SearchSelect value={f.warehouse_location} displayValue={f.warehouse_location}
+                      fetchOptions={searchLocations}
+                      onSelect={(v) => set("warehouse_location", v || "")}
+                      placeholder="Type to search..." />
+                    <button type="button" onClick={() => set("_showLocModal", true)}
+                      className="text-[11px] text-amber-600 hover:text-amber-700 font-medium mt-1">+ Add new location</button>
+                  </>
+                )}
               </div>
               <div><label className={lc}>Store Location</label><input className={ic} value={f.store_location} onChange={e => set("store_location", e.target.value)} placeholder="e.g., Aisle 4" /></div>
             </div>
@@ -503,12 +521,156 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
   );
 }
 
+function LocationsManager({ localItemId, onPrimaryChange }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [draggingIdx, setDraggingIdx] = useState(null);
+  const [overIdx, setOverIdx] = useState(null);
+  const initialLoaded = useRef(false);
+
+  const load = useCallback(async () => {
+    if (!initialLoaded.current) setLoading(true);
+    try {
+      const data = await getItemLocations(localItemId);
+      setRows(data);
+      initialLoaded.current = true;
+    } finally { setLoading(false); }
+  }, [localItemId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const syncPrimary = useCallback(async (label) => {
+    await qry("local_items", {
+      update: { warehouse_location: label || null, updated_at: new Date().toISOString() },
+      match: { id: localItemId },
+    });
+    onPrimaryChange?.(label);
+  }, [localItemId, onPrimaryChange]);
+
+  const persistOrder = async (next) => {
+    for (let i = 0; i < next.length; i++) {
+      const r = next[i];
+      if (!r.id) continue;
+      if (r.sort_order === i && r.is_primary === (i === 0)) continue;
+      await qry("local_item_locations", {
+        update: { sort_order: i, is_primary: i === 0, updated_at: new Date().toISOString() },
+        match: { id: r.id },
+      });
+    }
+    await syncPrimary(next[0]?.location || null);
+  };
+
+  const handleDrop = async (e, dropIdx) => {
+    e.preventDefault();
+    const from = draggingIdx;
+    setDraggingIdx(null);
+    setOverIdx(null);
+    if (from == null || from === dropIdx) return;
+    const reordered = [...rows];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(dropIdx, 0, moved);
+    // Reflect new sort_order/is_primary locally so UI matches what we'll persist
+    const synced = reordered.map((r, i) => ({ ...r, sort_order: i, is_primary: i === 0 }));
+    setRows(synced);
+    setBusy(true);
+    try { await persistOrder(synced); }
+    catch (err) { alert("Error: " + err.message); await load(); }
+    setBusy(false);
+  };
+
+  const swap = async (idx, newLocation) => {
+    if (!newLocation) return;
+    const row = rows[idx];
+    if (row && row.location === newLocation) return;
+    if (rows.some((r, i) => i !== idx && r.location === newLocation)) {
+      alert("That location is already in the list.");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (row?._draft) {
+        await addItemLocation(localItemId, newLocation, idx === 0, idx);
+      } else {
+        await qry("local_item_locations", {
+          update: { location: newLocation, updated_at: new Date().toISOString() },
+          match: { id: row.id },
+        });
+      }
+      await load();
+      if (idx === 0) await syncPrimary(newLocation);
+    } catch (err) { alert("Error: " + err.message); }
+    setBusy(false);
+  };
+
+  const remove = async (idx) => {
+    const row = rows[idx];
+    if (row._draft) { setRows(rows.filter((_, i) => i !== idx)); return; }
+    if (!confirm(`Remove "${row.location}"?`)) return;
+    setBusy(true);
+    try {
+      await removeItemLocation(row.id);
+      const next = rows.filter((_, i) => i !== idx);
+      setRows(next);
+      await persistOrder(next);
+      if (next.length === 0) await syncPrimary(null);
+    } catch (err) { alert("Error: " + err.message); }
+    setBusy(false);
+  };
+
+  const addBlank = () => {
+    if (rows.some(r => r._draft)) return;
+    setRows([...rows, { id: null, location: "", is_primary: false, sort_order: rows.length, _draft: true }]);
+  };
+
+  return (
+    <div className="border border-stone-200 rounded-lg bg-white">
+      <div className="divide-y divide-stone-100">
+        {loading ? (
+          <div className="px-3 py-2 text-xs text-stone-400">Loading...</div>
+        ) : rows.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-stone-400">No locations assigned yet.</div>
+        ) : (
+          rows.map((row, i) => (
+            <div key={row.id ?? `draft-${i}`}
+              draggable={!row._draft && !busy}
+              onDragStart={() => setDraggingIdx(i)}
+              onDragEnd={() => { setDraggingIdx(null); setOverIdx(null); }}
+              onDragOver={(e) => { e.preventDefault(); if (overIdx !== i) setOverIdx(i); }}
+              onDrop={(e) => handleDrop(e, i)}
+              className={`flex items-center gap-2 px-2 py-1.5 transition-colors ${draggingIdx === i ? "opacity-40" : ""} ${overIdx === i && draggingIdx !== i ? "bg-amber-50" : ""}`}>
+              <span className={`text-stone-300 select-none ${row._draft ? "" : "cursor-grab"}`} title="Drag to reorder">⋮⋮</span>
+              <div className="flex-1 min-w-0">
+                <SearchSelect value={row.location} displayValue={row.location}
+                  fetchOptions={searchLocations}
+                  onSelect={(v) => v && swap(i, v)}
+                  placeholder={row._draft ? "Select a location..." : "Click to swap..."} />
+              </div>
+              {i === 0 && !row._draft && (
+                <span className="text-[10px] italic text-amber-600 shrink-0">Primary</span>
+              )}
+              <button type="button" disabled={busy} onClick={() => remove(i)}
+                className="text-stone-300 hover:text-red-500 text-lg leading-none px-1" title="Remove">×</button>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="border-t border-stone-100 p-2">
+        <button type="button" onClick={addBlank} disabled={busy || rows.some(r => r._draft)}
+          className="text-[11px] font-bold uppercase tracking-wide text-amber-600 hover:text-amber-700 disabled:opacity-50">
+          + Add Location
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AddLocationModal({ ic, lc, onClose }) {
-  const [loc, setLoc] = useState({ section: "", row: "", slot: "", whSection: "", aisle: "", notes: "" });
+  const [loc, setLoc] = useState({ prefix: "", section: "", row: "", slot: "", whSection: "", aisle: "", notes: "" });
   const [saving, setSaving] = useState(false);
   const s = (k, v) => setLoc(prev => ({ ...prev, [k]: v }));
   const label = loc.section && loc.row
-    ? `${loc.section}${loc.row.toUpperCase()}${loc.slot ? `-${loc.slot}` : ""}`
+    ? `${loc.prefix ? `${loc.prefix}-` : ""}${loc.section}${loc.row.toUpperCase()}${loc.slot ? `-${loc.slot}` : ""}`
     : "";
 
   const save = async () => {
@@ -538,7 +700,15 @@ function AddLocationModal({ ic, lc, onClose }) {
           <h3 className="text-base font-bold text-stone-800">Add New Location</h3>
         </div>
         <div className="px-5 py-4 space-y-3">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-3">
+            <div>
+              <label className={lc}>Prefix</label>
+              <select className={ic} value={loc.prefix} onChange={e => s("prefix", e.target.value)}>
+                <option value="">None</option>
+                <option value="C">C</option>
+                <option value="F">F</option>
+              </select>
+            </div>
             <div><label className={lc}>Section # *</label><input type="number" className={ic} value={loc.section} onChange={e => s("section", e.target.value)} placeholder="1" autoFocus /></div>
             <div><label className={lc}>Row *</label><input className={ic} value={loc.row} onChange={e => s("row", e.target.value)} placeholder="A" maxLength={2} /></div>
             <div><label className={lc}>Slot</label><input type="number" className={ic} value={loc.slot} onChange={e => s("slot", e.target.value)} placeholder="—" /></div>

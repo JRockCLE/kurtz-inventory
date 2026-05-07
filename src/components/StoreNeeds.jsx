@@ -1,6 +1,13 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { qry, fetchItemsForNeeds } from "../lib/hooks";
-import { fmt$, fmtDate, naturalCompare } from "../lib/helpers";
+import { qry, fetchItemsForNeeds, fetchOrderTypes } from "../lib/hooks";
+import { fmt$, fmtDate, naturalCompare, prefixColorClass } from "../lib/helpers";
+
+const TYPE_BADGE = {
+  dry: { label: "Dry", cls: "bg-amber-100 text-amber-800" },
+  cooler: { label: "Cooler", cls: "bg-blue-100 text-blue-800" },
+  freezer: { label: "Freezer", cls: "bg-green-100 text-green-800" },
+  mixed: { label: "Mixed", cls: "bg-stone-200 text-stone-700" },
+};
 
 const _canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
 function measureText(text, font = "500 14px ui-sans-serif, system-ui, sans-serif") {
@@ -18,7 +25,7 @@ function dynamicWidth(items, field, font, minW = 80, maxW = 300) {
   return Math.max(minW, Math.min(maxW, Math.round(avg * 1.1) + 24));
 }
 
-function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false }) {
+function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false, scope = "all" }) {
   const [allItems, setAllItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [quantities, setQuantities] = useState({});
@@ -26,6 +33,7 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
   const [submitting, setSubmitting] = useState(false);
   const [orderId, setOrderId] = useState(initialOrderId || null);
   const [savedToast, setSavedToast] = useState(false);
+  const [onlyOrdered, setOnlyOrdered] = useState(false);
 
   const deptMap = Object.fromEntries((data.depts || []).map(d => [d.Dept_ID, d.Name_TX]));
   const catMap = Object.fromEntries((data.categories || []).map(c => [c.Category_ID, c.Name_TX]));
@@ -38,7 +46,8 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
     setLoading(true);
     fetchItemsForNeeds()
       .then(async (items) => {
-        setAllItems(items);
+        const filtered = scope === "all" ? items : items.filter(i => i.product_type === scope);
+        setAllItems(filtered);
         // Load saved quantities if reopening a draft
         if (initialOrderId) {
           try {
@@ -59,11 +68,14 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [initialOrderId]);
+  }, [initialOrderId, scope]);
 
   const grouped = useMemo(() => {
     const g = {};
-    allItems.forEach(item => {
+    const source = onlyOrdered
+      ? allItems.filter(i => (quantities[String(i.id)] || 0) > 0)
+      : allItems;
+    source.forEach(item => {
       const dk = (item.dept_id ? deptMap[item.dept_id] : null) || "Other";
       if (!g[dk]) g[dk] = { dept: dk, items: [] };
       g[dk].items.push(item);
@@ -76,7 +88,7 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
       );
     });
     return Object.values(g).sort((a, b) => a.dept.localeCompare(b.dept));
-  }, [allItems, deptMap, catMap]);
+  }, [allItems, deptMap, catMap, onlyOrdered, quantities]);
 
   const setQty = (id, val) => {
     const n = parseInt(val) || 0;
@@ -194,6 +206,10 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
           {totalItems > 0 && (
             <span className="text-sm text-amber-700 font-semibold">{totalItems} items, {totalCases} cases</span>
           )}
+          <button onClick={() => setOnlyOrdered(o => !o)} disabled={totalItems === 0}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${onlyOrdered ? "bg-amber-600 text-white hover:bg-amber-700" : "bg-stone-100 text-stone-700 hover:bg-stone-200"}`}>
+            {onlyOrdered ? "Show All" : "Show Ordered Only"}
+          </button>
           <button onClick={() => window.print()}
             className="px-3 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-sm hover:bg-stone-200">
             Print
@@ -305,7 +321,7 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
                     <div className="px-2 py-1.5 border-r border-stone-100 truncate font-medium text-stone-800">{item.name}</div>
                     <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{sizeUnit || "—"}</div>
                     <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{item.case_size || "—"}</div>
-                    <div className="px-2 py-1.5 text-center border-r border-stone-100 text-xs text-amber-700 font-medium">{item.warehouse_location || "—"}</div>
+                    <div className={`px-2 py-1.5 text-center border-r border-stone-100 text-xs font-medium ${item.warehouse_location ? prefixColorClass(item.warehouse_location) : "text-stone-400"}`}>{item.warehouse_location || "—"}</div>
                     <div className="px-1 py-1 border-r border-stone-100 flex items-center justify-center">
                       {readOnly ? (
                         <span className={`text-sm font-bold ${hasQty ? "text-amber-800" : "text-stone-300"}`}>{hasQty ? quantities[itemKey] : "—"}</span>
@@ -345,6 +361,7 @@ export default function StoreNeeds({ data, onSubmitOrder }) {
   const [view, setView] = useState("list"); // "list", "create", or orderId number
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [typeMap, setTypeMap] = useState({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -357,6 +374,15 @@ export default function StoreNeeds({ data, onSubmitOrder }) {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    if (!orders.length) { setTypeMap({}); return; }
+    let cancelled = false;
+    fetchOrderTypes(orders.map(o => o.id))
+      .then(s => { if (!cancelled) setTypeMap(s); })
+      .catch(() => { if (!cancelled) setTypeMap({}); });
+    return () => { cancelled = true; };
+  }, [orders]);
+
   const deleteOrder = async (id) => {
     if (!confirm("Delete this list and its pick list?")) return;
     try {
@@ -367,8 +393,27 @@ export default function StoreNeeds({ data, onSubmitOrder }) {
     } catch (err) { alert("Error: " + err.message); }
   };
 
-  if (view === "create" || typeof view === "object") {
+  if (view === "scope") {
+    return (
+      <div className="flex flex-col h-full items-center justify-center bg-stone-50 px-4">
+        <div className="bg-white rounded-xl shadow-lg p-8 max-w-md w-full">
+          <h2 className="text-lg font-bold text-stone-800 mb-1">What kind of list?</h2>
+          <p className="text-sm text-stone-500 mb-5">Pick a scope. Only items of that type will appear in the list builder.</p>
+          <div className="grid grid-cols-2 gap-3 mb-5">
+            <button onClick={() => setView({ create: true, scope: "all" })} className="px-4 py-3 bg-stone-700 text-white rounded-lg text-sm font-bold hover:bg-stone-800">All Products</button>
+            <button onClick={() => setView({ create: true, scope: "dry" })} className="px-4 py-3 bg-amber-600 text-white rounded-lg text-sm font-bold hover:bg-amber-700">Dry</button>
+            <button onClick={() => setView({ create: true, scope: "cooler" })} className="px-4 py-3 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">Cooler</button>
+            <button onClick={() => setView({ create: true, scope: "freezer" })} className="px-4 py-3 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">Freezer</button>
+          </div>
+          <button onClick={() => setView("list")} className="text-sm text-stone-500 hover:text-stone-800">Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "create" || (typeof view === "object" && view !== null)) {
     return <StoreListForm data={data} orderId={view?.id || null} readOnly={view?.readOnly || false}
+      scope={view?.scope || "all"}
       onDone={() => { setView("list"); load(); onSubmitOrder?.(); }} />;
   }
 
@@ -376,14 +421,14 @@ export default function StoreNeeds({ data, onSubmitOrder }) {
     <div className="flex flex-col h-full">
       <div className="bg-white border-b border-stone-200 px-4 py-3 flex items-center justify-between">
         <h2 className="text-lg font-bold text-stone-800">Store Lists</h2>
-        <button onClick={() => setView("create")}
+        <button onClick={() => setView("scope")}
           className="px-4 py-1.5 bg-amber-600 text-white rounded-lg text-sm font-bold hover:bg-amber-700">
           + Create New List
         </button>
       </div>
 
       <div className="flex-1 overflow-auto bg-stone-50">
-        {loading ? (
+        {loading && orders.length === 0 ? (
           <div className="p-8 text-center text-stone-400">Loading...</div>
         ) : orders.length === 0 ? (
           <div className="p-12 text-center">
@@ -399,28 +444,35 @@ export default function StoreNeeds({ data, onSubmitOrder }) {
               const caseCount = parts ? parts[2] : "—";
 
               return (
-                <div key={o.id} className="px-4 py-3 bg-white hover:bg-stone-50 transition-colors flex items-center gap-4 cursor-pointer"
+                <div key={o.id}
+                  className="px-4 py-3 bg-white hover:bg-stone-50 transition-colors grid items-center gap-3 cursor-pointer"
+                  style={{ gridTemplateColumns: "360px 100px 130px 1fr auto" }}
                   onClick={() => setView({ id: o.id, readOnly: o.status !== "draft" })}>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-stone-800">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-stone-800 truncate">
                       Store List #{o.id}
                     </div>
-                    <div className="text-xs text-stone-400">
-                      {new Date(o.created_at).toLocaleString()}
+                    <div className="text-xs text-stone-400 truncate">
+                      {new Date(o.created_at).toLocaleString()} — {itemCount} items, {caseCount} cases
                     </div>
                   </div>
-                  <div className="text-right text-xs shrink-0">
-                    <div className="text-stone-700 font-semibold">{itemCount} items</div>
-                    <div className="text-stone-500">{caseCount} cases</div>
+                  <div>
+                    {(() => {
+                      const tb = typeMap[o.id] ? TYPE_BADGE[typeMap[o.id]] : null;
+                      return tb ? <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${tb.cls}`}>{tb.label}</span> : null;
+                    })()}
                   </div>
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border shrink-0 ${
-                    o.status === "draft" ? "bg-amber-100 text-amber-800 border-amber-200" :
-                    o.status === "submitted" ? "bg-green-100 text-green-800 border-green-200" :
-                    "bg-stone-100 text-stone-500 border-stone-200"
-                  }`}>
-                    {o.status === "draft" ? "In Progress" : o.status === "submitted" ? "Submitted" : o.status}
-                  </span>
-                  <button onClick={() => deleteOrder(o.id)}
+                  <div>
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                      o.status === "draft" ? "bg-amber-100 text-amber-800 border-amber-200" :
+                      o.status === "submitted" ? "bg-green-100 text-green-800 border-green-200" :
+                      "bg-stone-100 text-stone-500 border-stone-200"
+                    }`}>
+                      {o.status === "draft" ? "In Progress" : o.status === "submitted" ? "Submitted" : o.status}
+                    </span>
+                  </div>
+                  <div />
+                  <button onClick={(e) => { e.stopPropagation(); deleteOrder(o.id); }}
                     className="text-stone-300 hover:text-red-500 transition-colors text-sm shrink-0" title="Delete list">
                     x
                   </button>
