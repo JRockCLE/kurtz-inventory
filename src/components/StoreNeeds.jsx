@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { qry, fetchItemsForNeeds, fetchOrderTypes } from "../lib/hooks";
-import { fmt$, fmtDate, naturalCompare, prefixColorClass } from "../lib/helpers";
+import { prefixColorClass } from "../lib/helpers";
 
 const TYPE_BADGE = {
   dry: { label: "Dry", cls: "bg-amber-100 text-amber-800" },
@@ -8,6 +8,55 @@ const TYPE_BADGE = {
   freezer: { label: "Freezer", cls: "bg-green-100 text-green-800" },
   mixed: { label: "Mixed", cls: "bg-stone-200 text-stone-700" },
 };
+
+const TYPE_DISPLAY = {
+  dry: { label: "Dry", text: "text-amber-700", banner: "bg-amber-600", hover: "hover:bg-amber-50" },
+  cooler: { label: "Cooler", text: "text-blue-700", banner: "bg-blue-600", hover: "hover:bg-blue-50" },
+  freezer: { label: "Freezer", text: "text-green-700", banner: "bg-green-600", hover: "hover:bg-green-50" },
+};
+
+const slug = (s) => (s || "other").replace(/[^a-zA-Z0-9]/g, "-").toLowerCase();
+
+// Memoized row — only re-renders when its own item/qty/note (or width) changes.
+const StoreItemRow = memo(function StoreItemRow({
+  item, ii, qty, note, mfgW, descW, unitMap, readOnly, setQty, setNote, handleGridNav,
+}) {
+  const itemKey = String(item.id);
+  const hasQty = (qty || 0) > 0;
+  const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
+  return (
+    <div className={`grid border-b border-stone-100 text-sm ${hasQty ? "bg-amber-50" : ii % 2 ? "bg-stone-50/50" : ""}`}
+      style={{ gridTemplateColumns: `${mfgW}px ${descW}px 80px 70px 70px 70px 1fr` }}>
+      <div className="px-2 py-1.5 border-r border-stone-100 truncate text-stone-500 text-xs">{item._mfg_name || "—"}</div>
+      <div className="px-2 py-1.5 border-r border-stone-100 truncate font-medium text-stone-800">{item.name}</div>
+      <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{sizeUnit || "—"}</div>
+      <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{item.case_size || "—"}</div>
+      <div className={`px-2 py-1.5 text-center border-r border-stone-100 text-xs font-medium ${item.warehouse_location ? prefixColorClass(item.warehouse_location) : "text-stone-400"}`}>{item.warehouse_location || "—"}</div>
+      <div className="px-1 py-1 border-r border-stone-100 flex items-center justify-center">
+        {readOnly ? (
+          <span className={`text-sm font-bold ${hasQty ? "text-amber-800" : "text-stone-300"}`}>{hasQty ? qty : "—"}</span>
+        ) : (
+          <input type="number" min={0} value={qty || ""} onChange={e => setQty(itemKey, e.target.value)} placeholder="—"
+            data-grid-cell={`qty-${itemKey}`}
+            onKeyDown={e => handleGridNav(e, itemKey, "qty")}
+            className={`w-14 text-center py-1 rounded text-sm font-bold border focus:outline-none focus:ring-2 focus:ring-amber-500 ${hasQty ? "border-amber-400 bg-amber-100 text-amber-800" : "border-stone-200 text-stone-400"}`} />
+        )}
+      </div>
+      <div className="px-1 py-1 flex items-center">
+        {readOnly ? (
+          <span className="text-xs text-stone-600 truncate">{note || ""}</span>
+        ) : (
+          <input type="text" value={note || ""}
+            onChange={e => setNote(itemKey, e.target.value)}
+            data-grid-cell={`notes-${itemKey}`}
+            onKeyDown={e => handleGridNav(e, itemKey, "notes")}
+            placeholder="Optional note..."
+            className="w-full px-2 py-1 text-xs border border-stone-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500" />
+        )}
+      </div>
+    </div>
+  );
+});
 
 const _canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
 function measureText(text, font = "500 14px ui-sans-serif, system-ui, sans-serif") {
@@ -34,10 +83,12 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
   const [orderId, setOrderId] = useState(initialOrderId || null);
   const [savedToast, setSavedToast] = useState(false);
   const [onlyOrdered, setOnlyOrdered] = useState(false);
+  const [search, setSearch] = useState("");
+  const [mfgLetter, setMfgLetter] = useState(null);
+  const [tocOpen, setTocOpen] = useState(true);
 
-  const deptMap = Object.fromEntries((data.depts || []).map(d => [d.Dept_ID, d.Name_TX]));
-  const catMap = Object.fromEntries((data.categories || []).map(c => [c.Category_ID, c.Name_TX]));
-  const unitMap = Object.fromEntries((data.units || []).map(u => [String(u.Unit_ID), u.Unit_Name_TX]));
+  const deptMap = useMemo(() => Object.fromEntries((data.depts || []).map(d => [d.Dept_ID, d.Name_TX])), [data.depts]);
+  const unitMap = useMemo(() => Object.fromEntries((data.units || []).map(u => [String(u.Unit_ID), u.Unit_Name_TX])), [data.units]);
 
   const mfgW = useMemo(() => dynamicWidth(allItems, "_mfg_name", "400 12px ui-sans-serif, system-ui, sans-serif", 80, 200), [allItems]);
   const descW = useMemo(() => dynamicWidth(allItems, "name", "500 14px ui-sans-serif, system-ui, sans-serif", 150, 400), [allItems]);
@@ -70,39 +121,86 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
       .finally(() => setLoading(false));
   }, [initialOrderId, scope]);
 
-  const grouped = useMemo(() => {
-    const g = {};
-    const source = onlyOrdered
-      ? allItems.filter(i => (quantities[String(i.id)] || 0) > 0)
-      : allItems;
-    source.forEach(item => {
-      const dk = (item.dept_id ? deptMap[item.dept_id] : null) || "Other";
-      if (!g[dk]) g[dk] = { dept: dk, items: [] };
-      g[dk].items.push(item);
+  const availableLetters = useMemo(() => {
+    const set = new Set();
+    allItems.forEach(i => {
+      const c = (i._mfg_name || "").charAt(0).toUpperCase();
+      if (/[A-Z]/.test(c)) set.add(c);
     });
-    // Sort items within each department: by Mfg then Description
-    Object.values(g).forEach(grp => {
-      grp.items.sort((a, b) =>
-        (a._mfg_name || "zzz").localeCompare(b._mfg_name || "zzz") ||
-        (a.name || "").localeCompare(b.name || "")
-      );
-    });
-    return Object.values(g).sort((a, b) => a.dept.localeCompare(b.dept));
-  }, [allItems, deptMap, catMap, onlyOrdered, quantities]);
+    return set;
+  }, [allItems]);
 
-  const setQty = (id, val) => {
+  // Static groups — no quantities dep, so editing a qty doesn't bust this memo
+  const baseTypeGroups = useMemo(() => {
+    let source = allItems;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      source = source.filter(i =>
+        (i.name || "").toLowerCase().includes(q) ||
+        (i._mfg_name || "").toLowerCase().includes(q) ||
+        (i.upc || "").toLowerCase().includes(q)
+      );
+    }
+    if (mfgLetter) {
+      source = source.filter(i => (i._mfg_name || "").charAt(0).toUpperCase() === mfgLetter);
+    }
+    const byType = { dry: {}, cooler: {}, freezer: {} };
+    source.forEach(item => {
+      const t = byType[item.product_type] ? item.product_type : "dry";
+      const dk = (item.dept_id ? deptMap[item.dept_id] : null) || "Other";
+      if (!byType[t][dk]) byType[t][dk] = [];
+      byType[t][dk].push(item);
+    });
+    return ["dry", "cooler", "freezer"].map(type => {
+      const depts = Object.entries(byType[type])
+        .map(([dept, items]) => ({
+          dept,
+          items: [...items].sort((a, b) =>
+            (a._mfg_name || "zzz").localeCompare(b._mfg_name || "zzz") ||
+            (a.name || "").localeCompare(b.name || "")
+          ),
+        }))
+        .sort((a, b) => a.dept.localeCompare(b.dept));
+      return { type, depts, count: depts.reduce((s, d) => s + d.items.length, 0) };
+    }).filter(g => g.depts.length > 0);
+  }, [allItems, deptMap, search, mfgLetter]);
+
+  // Apply onlyOrdered (uses quantities) on top — only re-runs when toggling that filter
+  const typeGroups = useMemo(() => {
+    if (!onlyOrdered) return baseTypeGroups;
+    return baseTypeGroups
+      .map(tg => ({
+        ...tg,
+        depts: tg.depts
+          .map(d => ({ ...d, items: d.items.filter(i => (quantities[String(i.id)] || 0) > 0) }))
+          .filter(d => d.items.length > 0),
+      }))
+      .map(tg => ({ ...tg, count: tg.depts.reduce((s, d) => s + d.items.length, 0) }))
+      .filter(tg => tg.depts.length > 0);
+  }, [baseTypeGroups, onlyOrdered, quantities]);
+
+  const setQty = useCallback((id, val) => {
     const n = parseInt(val) || 0;
     setQuantities(prev => {
       const next = { ...prev };
       if (n > 0) next[id] = n; else delete next[id];
       return next;
     });
-  };
+  }, []);
+
+  const setNote = useCallback((id, val) => {
+    setItemNotes(prev => ({ ...prev, [id]: val }));
+  }, []);
 
   const totalItems = Object.keys(quantities).length;
   const totalCases = Object.values(quantities).reduce((s, v) => s + v, 0);
 
-  const handleGridNav = (e, itemKey, col) => {
+  const scrollTo = useCallback((id) => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const handleGridNav = useCallback((e, itemKey, col) => {
     const key = e.key;
     if (key !== "ArrowUp" && key !== "ArrowDown" && key !== "ArrowLeft" && key !== "ArrowRight") return;
 
@@ -134,7 +232,7 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
       const next = key === "ArrowDown" ? inputs[idx + 1] : inputs[idx - 1];
       if (next) { next.focus(); next.select?.(); }
     }
-  };
+  }, []);
 
   const saveOrder = async (status) => {
     setSubmitting(true);
@@ -196,37 +294,57 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
           <span>Draft saved</span>
         </div>
       )}
-      <div className="bg-white border-b border-stone-200 px-4 py-3 flex items-center justify-between gap-3 print:hidden">
-        <div className="flex items-center gap-3">
-          <button onClick={() => onDone?.()} className="text-stone-500 hover:text-stone-800 text-sm">← Back</button>
-          <h2 className="text-lg font-bold text-stone-800">{orderId ? `Store List #${orderId}` : "New Store List"}</h2>
-          <span className="text-xs text-stone-400">{allItems.length.toLocaleString()} items</span>
-        </div>
-        <div className="flex items-center gap-3">
-          {totalItems > 0 && (
-            <span className="text-sm text-amber-700 font-semibold">{totalItems} items, {totalCases} cases</span>
-          )}
-          <button onClick={() => setOnlyOrdered(o => !o)} disabled={totalItems === 0}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${onlyOrdered ? "bg-amber-600 text-white hover:bg-amber-700" : "bg-stone-100 text-stone-700 hover:bg-stone-200"}`}>
-            {onlyOrdered ? "Show All" : "Show Ordered Only"}
+      <div className="bg-white border-b border-stone-200 px-4 py-3 flex items-center gap-2 print:hidden">
+        <button onClick={() => onDone?.()} className="text-stone-500 hover:text-stone-800 text-sm shrink-0">← Back</button>
+        <h2 className="text-base font-bold text-stone-800 shrink-0">{orderId ? `Store List #${orderId}` : "New Store List"}</h2>
+
+        <input type="text" placeholder="Search name, mfg, UPC..." value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="px-3 py-1.5 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 w-56 shrink-0" />
+
+        <div className="flex items-center gap-px shrink-0">
+          <button onClick={() => setMfgLetter(null)}
+            className={`px-1.5 h-7 text-[10px] font-bold rounded transition-colors ${mfgLetter === null ? "bg-amber-600 text-white" : "text-stone-500 hover:bg-stone-100"}`}>
+            All
           </button>
-          <button onClick={() => window.print()}
-            className="px-3 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-sm hover:bg-stone-200">
-            Print
-          </button>
-          {!readOnly && (
-            <>
-              <button onClick={() => saveOrder("draft")} disabled={submitting}
-                className="px-4 py-1.5 bg-stone-200 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-300 disabled:opacity-50">
-                {submitting ? "..." : "Save"}
+          {Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)).map(L => {
+            if (!availableLetters.has(L)) return null;
+            const active = mfgLetter === L;
+            return (
+              <button key={L} onClick={() => setMfgLetter(active ? null : L)}
+                className={`w-6 h-7 text-[10px] font-bold rounded transition-colors ${active ? "bg-amber-600 text-white" : "text-stone-600 hover:bg-stone-100"}`}>
+                {L}
               </button>
-              <button onClick={() => saveOrder("submitted")} disabled={totalItems === 0 || submitting}
-                className={`px-4 py-1.5 rounded-lg text-sm font-bold ${totalItems > 0 ? "bg-green-600 text-white hover:bg-green-700" : "bg-stone-200 text-stone-400 cursor-not-allowed"}`}>
-                Submit List ({totalCases} cs)
-              </button>
-            </>
-          )}
+            );
+          })}
         </div>
+
+        <button onClick={() => setOnlyOrdered(o => !o)} disabled={totalItems === 0}
+          className={`px-3 h-7 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 shrink-0 ${onlyOrdered ? "bg-amber-600 text-white hover:bg-amber-700" : "bg-stone-100 text-stone-700 hover:bg-stone-200"}`}>
+          {onlyOrdered ? "Show All" : "Ordered Only"}
+        </button>
+
+        <div className="flex-1" />
+
+        {totalItems > 0 && (
+          <span className="text-sm text-amber-700 font-semibold shrink-0">{totalItems} items / {totalCases} cs</span>
+        )}
+        <button onClick={() => window.print()}
+          className="px-3 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-sm hover:bg-stone-200 shrink-0">
+          Print
+        </button>
+        {!readOnly && (
+          <>
+            <button onClick={() => saveOrder("draft")} disabled={submitting}
+              className="px-3 py-1.5 bg-stone-200 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-300 disabled:opacity-50 shrink-0">
+              {submitting ? "..." : "Save"}
+            </button>
+            <button onClick={() => saveOrder("submitted")} disabled={totalItems === 0 || submitting}
+              className={`px-3 py-1.5 rounded-lg text-sm font-bold shrink-0 ${totalItems > 0 ? "bg-green-600 text-white hover:bg-green-700" : "bg-stone-200 text-stone-400 cursor-not-allowed"}`}>
+              Submit ({totalCases})
+            </button>
+          </>
+        )}
       </div>
 
       <div className="hidden print:block px-6 pt-6 pb-2">
@@ -242,116 +360,142 @@ function StoreListForm({ data, onDone, orderId: initialOrderId, readOnly = false
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-white print:overflow-visible">
-        {loading ? (
-          <div className="p-8 text-center text-stone-400">Loading items...</div>
-        ) : grouped.length === 0 ? (
-          <div className="p-12 text-center text-stone-400">No items in the system yet. Use Receiving to add items.</div>
-        ) : (
-          <>
-          {/* ─── Print: use table so thead repeats on each page ─── */}
-          <table className="hidden print:table w-full text-xs border-collapse" style={{ tableLayout: "auto" }}>
-            <thead style={{ display: "table-header-group" }}>
-              <tr className="border-b-2 border-stone-400 text-[10px] font-bold text-stone-600 uppercase">
-                <th className="px-2 py-1.5 text-left whitespace-nowrap">Mfg</th>
-                <th className="px-2 py-1.5 text-left">Description</th>
-                <th className="px-2 py-1.5 text-center whitespace-nowrap">Size/Unit</th>
-                <th className="px-2 py-1.5 text-center whitespace-nowrap">U/Case</th>
-                <th className="px-2 py-1.5 text-center whitespace-nowrap">WH Loc</th>
-                <th className="px-2 py-1.5 text-center" style={{ width: "70px" }}>Case Qty</th>
-                <th className="px-2 py-1.5 text-left" style={{ minWidth: "2in" }}>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grouped.map((group, gi) => [
-                <tr key={`h-${gi}`}>
-                  <td colSpan={7} className="pt-3 pb-1 px-2 font-bold text-xs uppercase text-stone-800 border-b border-stone-300">
-                    {group.dept}
-                    <span className="text-stone-400 ml-2 font-normal">{group.items.length}</span>
-                  </td>
-                </tr>,
-                ...group.items.map((item, ii) => {
-                  const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
-                  return (
-                    <tr key={`r-${item.id}`} className={ii % 2 ? "bg-stone-50" : ""}>
-                      <td className="px-2 py-1.5 text-stone-500 border-b border-stone-200 whitespace-nowrap">{item._mfg_name || "—"}</td>
-                      <td className="px-2 py-1.5 font-medium text-stone-800 border-b border-stone-200">{item.name}</td>
-                      <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{sizeUnit || "—"}</td>
-                      <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{item.case_size || "—"}</td>
-                      <td className="px-2 py-1.5 text-center text-stone-700 font-bold border-b border-stone-200 whitespace-nowrap">{item.warehouse_location || "—"}</td>
-                      <td className="px-1 py-1 text-center border border-stone-300" style={{ height: "32px" }}></td>
-                      <td className="px-2 py-1 border border-stone-300 text-xs text-stone-700">{itemNotes[String(item.id)] || ""}</td>
-                    </tr>
-                  );
-                }),
-              ])}
-            </tbody>
-          </table>
-
-          {/* ─── Screen: grid layout with sticky category headers ─── */}
-          <div className="print:hidden">
-          {grouped.map((group, gi) => (
-            <div key={gi}>
-              <div className="bg-stone-800 text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider sticky top-0 z-10 flex gap-2">
-                <span className="text-amber-400">{group.dept}</span>
-                <span className="text-stone-400 ml-auto">{group.items.length}</span>
-              </div>
-
-              <div className="grid border-b border-stone-300 bg-stone-100 text-[10px] font-bold text-stone-500 uppercase"
-                style={{ gridTemplateColumns: `${mfgW}px ${descW}px 80px 70px 70px 70px 1fr` }}>
-                <div className="px-2 py-1 border-r border-stone-200">Mfg</div>
-                <div className="px-2 py-1 border-r border-stone-200">Description</div>
-                <div className="px-2 py-1 text-center border-r border-stone-200">Size/Unit</div>
-                <div className="px-2 py-1 text-center border-r border-stone-200">U/Case</div>
-                <div className="px-2 py-1 text-center border-r border-stone-200">WH Loc</div>
-                <div className="px-2 py-1 text-center border-r border-stone-200">Case Qty</div>
-                <div className="px-2 py-1">Notes</div>
-              </div>
-
-              {group.items.map((item, ii) => {
-                const itemKey = String(item.id);
-                const hasQty = quantities[itemKey] > 0;
-                const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
-
+      <div className="flex-1 overflow-hidden bg-white print:overflow-visible flex">
+        {/* ─── TOC sidebar (slide-out) ─── */}
+        <div className={`shrink-0 ${tocOpen ? "w-44" : "w-9"} border-r border-stone-200 bg-stone-50 print:hidden flex flex-col transition-[width] duration-150`}>
+          <button onClick={() => setTocOpen(o => !o)}
+            className={`flex items-center px-2 py-2 hover:bg-stone-200 border-b border-stone-200 shrink-0 w-full ${tocOpen ? "justify-between" : "justify-center"}`}
+            title={tocOpen ? "Collapse table of contents" : "Show table of contents"}>
+            {tocOpen && <span className="text-[10px] uppercase font-bold tracking-wide text-stone-500">Jump to</span>}
+            <span className="text-amber-600 font-black text-xl leading-none">{tocOpen ? "«" : "»"}</span>
+          </button>
+          {tocOpen && (
+            <div className="flex-1 overflow-auto py-1">
+              {typeGroups.map(tg => {
+                const td = TYPE_DISPLAY[tg.type];
                 return (
-                  <div key={item.id}
-                    className={`grid border-b border-stone-100 text-sm ${hasQty ? "bg-amber-50" : ii % 2 ? "bg-stone-50/50" : ""}`}
-                    style={{ gridTemplateColumns: `${mfgW}px ${descW}px 80px 70px 70px 70px 1fr` }}>
-                    <div className="px-2 py-1.5 border-r border-stone-100 truncate text-stone-500 text-xs">{item._mfg_name || "—"}</div>
-                    <div className="px-2 py-1.5 border-r border-stone-100 truncate font-medium text-stone-800">{item.name}</div>
-                    <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{sizeUnit || "—"}</div>
-                    <div className="px-2 py-1.5 text-center border-r border-stone-100 text-stone-500 text-xs">{item.case_size || "—"}</div>
-                    <div className={`px-2 py-1.5 text-center border-r border-stone-100 text-xs font-medium ${item.warehouse_location ? prefixColorClass(item.warehouse_location) : "text-stone-400"}`}>{item.warehouse_location || "—"}</div>
-                    <div className="px-1 py-1 border-r border-stone-100 flex items-center justify-center">
-                      {readOnly ? (
-                        <span className={`text-sm font-bold ${hasQty ? "text-amber-800" : "text-stone-300"}`}>{hasQty ? quantities[itemKey] : "—"}</span>
-                      ) : (
-                        <input type="number" min={0} value={quantities[itemKey] || ""} onChange={e => setQty(itemKey, e.target.value)} placeholder="—"
-                          data-grid-cell={`qty-${itemKey}`}
-                          onKeyDown={e => handleGridNav(e, itemKey, "qty")}
-                          className={`w-14 text-center py-1 rounded text-sm font-bold border focus:outline-none focus:ring-2 focus:ring-amber-500 ${hasQty ? "border-amber-400 bg-amber-100 text-amber-800" : "border-stone-200 text-stone-400"}`} />
-                      )}
-                    </div>
-                    <div className="px-1 py-1 flex items-center">
-                      {readOnly ? (
-                        <span className="text-xs text-stone-600 truncate">{itemNotes[itemKey] || ""}</span>
-                      ) : (
-                        <input type="text" value={itemNotes[itemKey] || ""}
-                          onChange={e => setItemNotes(prev => ({ ...prev, [itemKey]: e.target.value }))}
-                          data-grid-cell={`notes-${itemKey}`}
-                          onKeyDown={e => handleGridNav(e, itemKey, "notes")}
-                          placeholder="Optional note..."
-                          className="w-full px-2 py-1 text-xs border border-stone-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500" />
-                      )}
-                    </div>
+                  <div key={tg.type} className="mb-2">
+                    <button onClick={() => scrollTo(`type-${tg.type}`)}
+                      className={`w-full text-left px-2 py-1 text-xs font-bold uppercase tracking-wide ${td.text} ${td.hover} flex justify-between items-center`}>
+                      <span>{td.label}</span>
+                      <span className="text-stone-400 font-normal">{tg.count}</span>
+                    </button>
+                    {tg.depts.map(d => (
+                      <button key={d.dept} onClick={() => scrollTo(`dept-${tg.type}-${slug(d.dept)}`)}
+                        className="w-full text-left px-3 py-0.5 text-[11px] text-stone-600 hover:bg-stone-200 truncate flex justify-between items-center gap-2">
+                        <span className="truncate">{d.dept}</span>
+                        <span className="text-stone-400 shrink-0">{d.items.length}</span>
+                      </button>
+                    ))}
                   </div>
                 );
               })}
             </div>
-          ))}
-          </div>
-          </>
-        )}
+          )}
+        </div>
+
+        {/* ─── Content (scrollable) ─── */}
+        <div className="flex-1 overflow-auto print:overflow-visible">
+          {loading ? (
+            <div className="p-8 text-center text-stone-400">Loading items...</div>
+          ) : typeGroups.length === 0 ? (
+            <div className="p-12 text-center text-stone-400">{search || mfgLetter || onlyOrdered ? "No items match your filters." : "No items in the system yet. Use Receiving to add items."}</div>
+          ) : (
+            <>
+            {/* ─── Print: use table so thead repeats on each page ─── */}
+            <table className="hidden print:table w-full text-xs border-collapse" style={{ tableLayout: "auto" }}>
+              <thead style={{ display: "table-header-group" }}>
+                <tr className="border-b-2 border-stone-400 text-[10px] font-bold text-stone-600 uppercase">
+                  <th className="px-2 py-1.5 text-left whitespace-nowrap">Mfg</th>
+                  <th className="px-2 py-1.5 text-left">Description</th>
+                  <th className="px-2 py-1.5 text-center whitespace-nowrap">Size/Unit</th>
+                  <th className="px-2 py-1.5 text-center whitespace-nowrap">U/Case</th>
+                  <th className="px-2 py-1.5 text-center whitespace-nowrap">WH Loc</th>
+                  <th className="px-2 py-1.5 text-center" style={{ width: "70px" }}>Case Qty</th>
+                  <th className="px-2 py-1.5 text-left" style={{ minWidth: "2in" }}>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {typeGroups.flatMap(tg => [
+                  <tr key={`th-${tg.type}`}>
+                    <td colSpan={7} className="pt-4 pb-1 px-2 font-black text-sm uppercase tracking-wider text-stone-900 border-b-2 border-stone-700">
+                      {TYPE_DISPLAY[tg.type].label}
+                      <span className="text-stone-400 ml-2 font-normal text-xs">{tg.count} items</span>
+                    </td>
+                  </tr>,
+                  ...tg.depts.flatMap(group => [
+                    <tr key={`h-${tg.type}-${group.dept}`}>
+                      <td colSpan={7} className="pt-2 pb-1 px-2 font-bold text-xs uppercase text-stone-800 border-b border-stone-300">
+                        {group.dept}
+                        <span className="text-stone-400 ml-2 font-normal">{group.items.length}</span>
+                      </td>
+                    </tr>,
+                    ...group.items.map((item, ii) => {
+                      const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null].filter(Boolean).join(" ");
+                      return (
+                        <tr key={`r-${item.id}`} className={ii % 2 ? "bg-stone-50" : ""}>
+                          <td className="px-2 py-1.5 text-stone-500 border-b border-stone-200 whitespace-nowrap">{item._mfg_name || "—"}</td>
+                          <td className="px-2 py-1.5 font-medium text-stone-800 border-b border-stone-200">{item.name}</td>
+                          <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{sizeUnit || "—"}</td>
+                          <td className="px-2 py-1.5 text-center text-stone-500 border-b border-stone-200 whitespace-nowrap">{item.case_size || "—"}</td>
+                          <td className="px-2 py-1.5 text-center text-stone-700 font-bold border-b border-stone-200 whitespace-nowrap">{item.warehouse_location || "—"}</td>
+                          <td className="px-1 py-1 text-center border border-stone-300" style={{ height: "32px" }}></td>
+                          <td className="px-2 py-1 border border-stone-300 text-xs text-stone-700">{itemNotes[String(item.id)] || ""}</td>
+                        </tr>
+                      );
+                    }),
+                  ]),
+                ])}
+              </tbody>
+            </table>
+
+            {/* ─── Screen: type sections, dept-grouped grid ─── */}
+            <div className="print:hidden">
+              {typeGroups.map(tg => {
+                const td = TYPE_DISPLAY[tg.type];
+                return (
+                  <div key={tg.type}>
+                    <div id={`type-${tg.type}`} className={`${td.banner} text-white px-3 py-2 text-sm font-black uppercase tracking-widest flex justify-between items-center`}>
+                      <span>{td.label}</span>
+                      <span className="text-white/70 text-xs font-normal">{tg.count} items</span>
+                    </div>
+                    {tg.depts.map(group => (
+                      <div key={group.dept} id={`dept-${tg.type}-${slug(group.dept)}`}>
+                        <div className="bg-stone-800 text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider sticky top-0 z-10 flex gap-2">
+                          <span className="text-amber-400">{group.dept}</span>
+                          <span className="text-stone-400 ml-auto">{group.items.length}</span>
+                        </div>
+
+                        <div className="grid border-b border-stone-300 bg-stone-100 text-[10px] font-bold text-stone-500 uppercase"
+                          style={{ gridTemplateColumns: `${mfgW}px ${descW}px 80px 70px 70px 70px 1fr` }}>
+                          <div className="px-2 py-1 border-r border-stone-200">Mfg</div>
+                          <div className="px-2 py-1 border-r border-stone-200">Description</div>
+                          <div className="px-2 py-1 text-center border-r border-stone-200">Size/Unit</div>
+                          <div className="px-2 py-1 text-center border-r border-stone-200">U/Case</div>
+                          <div className="px-2 py-1 text-center border-r border-stone-200">WH Loc</div>
+                          <div className="px-2 py-1 text-center border-r border-stone-200">Case Qty</div>
+                          <div className="px-2 py-1">Notes</div>
+                        </div>
+
+                        {group.items.map((item, ii) => (
+                          <StoreItemRow key={item.id}
+                            item={item} ii={ii}
+                            qty={quantities[String(item.id)]}
+                            note={itemNotes[String(item.id)]}
+                            mfgW={mfgW} descW={descW} unitMap={unitMap}
+                            readOnly={readOnly}
+                            setQty={setQty} setNote={setNote}
+                            handleGridNav={handleGridNav} />
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

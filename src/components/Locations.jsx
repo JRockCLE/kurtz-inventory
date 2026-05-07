@@ -455,7 +455,7 @@ export default function Locations() {
                           <option value="F">F</option>
                         </select>
                       ) : (
-                        <div className={`px-2 py-1.5 rounded cursor-pointer hover:bg-amber-50 text-xs text-center font-bold ${prefixVal === "C" ? "text-blue-600" : prefixVal === "F" ? "text-cyan-600" : "text-stone-300"}`}>
+                        <div className={`px-2 py-1.5 rounded cursor-pointer hover:bg-amber-50 text-xs text-center font-bold ${prefixVal === "C" ? "text-blue-600" : prefixVal === "F" ? "text-green-600" : "text-stone-300"}`}>
                           {prefixVal || "—"}
                         </div>
                       )}
