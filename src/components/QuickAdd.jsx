@@ -86,29 +86,18 @@ export default function QuickAdd() {
       return;
     }
 
-    // Check StoreLIVE
+    // Check StoreLIVE — hold the data in component state. We don't INSERT yet;
+    // the row is only created when the user clicks Save below.
     const posbe = await lookupBarcode(upc);
     if (posbe) {
-      try {
-        const [newItem] = await qry("local_items", {
-          insert: {
-            upc, name: posbe.name, size: posbe.size || null,
-            mfg_id: posbe.mfg_id ? parseInt(posbe.mfg_id) : null,
-            retail_price: posbe.price ? parseFloat(posbe.price) : null,
-            dept_id: posbe.dept_id ? parseInt(posbe.dept_id) : null,
-            category_id: posbe.category_id ? parseInt(posbe.category_id) : null,
-            sub_category_id: posbe.sub_category_id ? parseInt(posbe.sub_category_id) : null,
-            ref_unit_cd: posbe.unit_cd ? parseInt(posbe.unit_cd) : null,
-            from_posbe: true, posbe_item_id: posbe.item_id,
-            sync_status: "local", created_by: "QuickAdd", active_yn: "Y",
-            cases_on_hand: 0, product_type: "dry",
-          },
-        });
-        setStatus({ type: "created", message: `${posbe.name} (from StoreLIVE)`, item: { ...newItem, name: posbe.name }, upc });
-        setTimeout(() => locationRef.current?.querySelector("input")?.focus(), 100);
-      } catch (err) {
-        setStatus({ type: "error", message: `Error creating item: ${err.message}` });
-      }
+      setProductType("dry");
+      setStatus({
+        type: "created",
+        message: `${posbe.name} (from StoreLIVE)`,
+        item: { _pending: true, _posbe: posbe, name: posbe.name, product_type: "dry" },
+        upc,
+      });
+      setTimeout(() => locationRef.current?.querySelector("input")?.focus(), 100);
       return;
     }
 
@@ -121,45 +110,83 @@ export default function QuickAdd() {
     if (!status?.item) return;
     setSaving(true);
     try {
-      const itemId = status.item.id;
       const trimmedLoc = location?.trim();
-      const itemUpdate = {};
 
-      if (trimmedLoc) {
-        const existingLocs = await qry("local_item_locations", {
-          select: "id", filters: `local_item_id=eq.${itemId}`, limit: 1,
+      // Upload any photos first; same URLs are used for INSERT or UPDATE below.
+      const photoUrls = [];
+      for (const p of photos) {
+        const url = await uploadPhoto(p.file, status.upc);
+        photoUrls.push(url);
+      }
+
+      let itemId = status.item.id;
+
+      if (status.item._pending && status.item._posbe) {
+        // Brand-new item from StoreLIVE — create the row now, with everything the user entered.
+        const posbe = status.item._posbe;
+        const [newItem] = await qry("local_items", {
+          insert: {
+            upc: status.upc,
+            name: posbe.name,
+            size: posbe.size || null,
+            mfg_id: posbe.mfg_id ? parseInt(posbe.mfg_id) : null,
+            retail_price: posbe.price ? parseFloat(posbe.price) : null,
+            dept_id: posbe.dept_id ? parseInt(posbe.dept_id) : null,
+            category_id: posbe.category_id ? parseInt(posbe.category_id) : null,
+            sub_category_id: posbe.sub_category_id ? parseInt(posbe.sub_category_id) : null,
+            ref_unit_cd: posbe.unit_cd ? parseInt(posbe.unit_cd) : null,
+            from_posbe: true,
+            posbe_item_id: posbe.item_id,
+            sync_status: "local",
+            created_by: "QuickAdd",
+            active_yn: "Y",
+            cases_on_hand: 0,
+            product_type: productType || "dry",
+            expiration_date: expDate || null,
+            case_size: caseSize ? parseInt(caseSize) : null,
+            warehouse_location: trimmedLoc || null,
+            photos: photoUrls,
+            default_photo: photoUrls[0] || null,
+          },
         });
-        const isFirst = !existingLocs.length;
-        try { await addItemLocation(itemId, trimmedLoc, isFirst); } catch { /* dup */ }
-        if (isFirst) itemUpdate.warehouse_location = trimmedLoc;
-      }
-
-      if (expDate) itemUpdate.expiration_date = expDate;
-      if (caseSize) itemUpdate.case_size = parseInt(caseSize);
-      if (productType && productType !== status.item.product_type) itemUpdate.product_type = productType;
-
-      // Upload and save photos
-      if (photos.length > 0) {
-        const photoUrls = [];
-        for (const p of photos) {
-          const url = await uploadPhoto(p.file, status.upc);
-          photoUrls.push(url);
+        itemId = newItem.id;
+        if (trimmedLoc) {
+          try { await addItemLocation(itemId, trimmedLoc, true); } catch { /* dup */ }
         }
-        // Merge with any existing photos
-        try {
-          const [existing] = await qry("local_items", { select: "photos,default_photo", filters: `id=eq.${itemId}`, limit: 1 });
-          const prev = existing?.photos || [];
-          itemUpdate.photos = [...prev, ...photoUrls];
-          if (!existing?.default_photo) itemUpdate.default_photo = photoUrls[0];
-        } catch {
-          itemUpdate.photos = photoUrls;
-          itemUpdate.default_photo = photoUrls[0];
+      } else {
+        // Item already exists in our system — apply a patch update.
+        const itemUpdate = {};
+
+        if (trimmedLoc) {
+          const existingLocs = await qry("local_item_locations", {
+            select: "id", filters: `local_item_id=eq.${itemId}`, limit: 1,
+          });
+          const isFirst = !existingLocs.length;
+          try { await addItemLocation(itemId, trimmedLoc, isFirst); } catch { /* dup */ }
+          if (isFirst) itemUpdate.warehouse_location = trimmedLoc;
+        }
+
+        if (expDate) itemUpdate.expiration_date = expDate;
+        if (caseSize) itemUpdate.case_size = parseInt(caseSize);
+        if (productType && productType !== status.item.product_type) itemUpdate.product_type = productType;
+
+        if (photoUrls.length > 0) {
+          try {
+            const [existing] = await qry("local_items", { select: "photos,default_photo", filters: `id=eq.${itemId}`, limit: 1 });
+            const prev = existing?.photos || [];
+            itemUpdate.photos = [...prev, ...photoUrls];
+            if (!existing?.default_photo) itemUpdate.default_photo = photoUrls[0];
+          } catch {
+            itemUpdate.photos = photoUrls;
+            itemUpdate.default_photo = photoUrls[0];
+          }
+        }
+
+        if (Object.keys(itemUpdate).length) {
+          await qry("local_items", { update: itemUpdate, match: { id: itemId } });
         }
       }
 
-      if (Object.keys(itemUpdate).length) {
-        await qry("local_items", { update: itemUpdate, match: { id: itemId } });
-      }
       setLog(prev => [{
         name: status.item.name, upc: status.upc,
         location: trimmedLoc || "—",

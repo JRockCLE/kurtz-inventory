@@ -106,7 +106,7 @@ export default function App() {
         {tab === "orders" && !selectedOrder && <Orders orders={orders} loading={ordersLoading} onSelect={id => setSelectedOrder(id)} />}
         {tab === "orders" && selectedOrder && <PickList orderId={selectedOrder} data={data} onBack={() => { setSelectedOrder(null); refreshOrders(); }} onUpdate={refreshOrders} />}
         {tab === "scans" && <ScanHub />}
-        {tab === "settings" && <Settings />}
+        {tab === "settings" && <Settings data={data} />}
       </div>
 
       {showEditModal && editItem && (

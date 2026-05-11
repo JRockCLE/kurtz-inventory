@@ -5,7 +5,7 @@ import Locations from "./Locations";
 import UnprocessedItems from "./UnprocessedItems";
 import SyncToStoreLive from "./SyncToStoreLive";
 
-export default function Settings() {
+export default function Settings({ data }) {
   const [subtab, setSubtab] = useState("quickadd");
 
   const tabs = [
@@ -30,7 +30,7 @@ export default function Settings() {
       </div>
       <div className="flex-1 overflow-hidden">
         {subtab === "quickadd" && <QuickAdd />}
-        {subtab === "needs-locations" && <NeedsLocations />}
+        {subtab === "needs-locations" && <NeedsLocations data={data} />}
         {subtab === "unprocessed" && <UnprocessedItems />}
         {subtab === "sync" && <SyncToStoreLive />}
         {subtab === "locations" && <Locations />}

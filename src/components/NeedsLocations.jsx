@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { qry, SB_URL, SB_KEY, addItemLocation, searchLocations } from "../lib/hooks";
 import { splitLocation } from "../lib/helpers";
 import SearchSelect from "./SearchSelect";
+import ItemModal from "./ItemModal";
 
 const IDLE_PILL = "bg-stone-100 text-stone-400 hover:bg-stone-200 hover:text-stone-600";
 const TYPE_OPTIONS = [
@@ -96,7 +97,7 @@ const SORTABLE_FIELDS = {
   created_at:       i => new Date(i.created_at).getTime(),
 };
 
-export default function NeedsLocations() {
+export default function NeedsLocations({ data }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState(null);
@@ -104,6 +105,7 @@ export default function NeedsLocations() {
   const [typeFilter, setTypeFilter] = useState("");
   const [sortField, setSortField] = useState("created_at");
   const [sortDir, setSortDir] = useState("desc");
+  const [editItem, setEditItem] = useState(null);
 
   const onSort = (field) => {
     if (field === sortField) {
@@ -298,13 +300,14 @@ export default function NeedsLocations() {
                 return (
                   <div key={item.id}
                     className={`p-3 bg-white ${busy ? "opacity-60" : ""}`}>
-                    {/* Photo + identity */}
-                    <div className="flex gap-3">
+                    {/* Photo + identity — tap to edit */}
+                    <div className="flex gap-3 cursor-pointer active:bg-amber-50 -mx-3 px-3 py-1 rounded"
+                      onClick={() => setEditItem(item)}>
                       {item.default_photo ? (
                         <img src={item.default_photo} alt=""
                           className="w-14 h-14 object-cover rounded border border-stone-200 shrink-0" />
                       ) : (
-                        <div className="w-14 h-14 rounded bg-stone-100 border border-stone-200 shrink-0" />
+                        <div className="w-14 h-14 rounded bg-stone-100 border border-stone-200 shrink-0 flex items-center justify-center text-stone-300 text-xs">No photo</div>
                       )}
                       <div className="flex-1 min-w-0">
                         <div className="font-semibold text-stone-800 text-sm leading-tight">
@@ -315,6 +318,7 @@ export default function NeedsLocations() {
                           {item.size && <span>· {item.size}</span>}
                           <span className="font-mono">· {item.upc}</span>
                         </div>
+                        <div className="text-[10px] text-amber-600 font-semibold uppercase tracking-wide mt-0.5">Tap to edit / delete</div>
                       </div>
                     </div>
 
@@ -380,7 +384,7 @@ export default function NeedsLocations() {
                   return (
                     <tr key={item.id}
                       className={`border-b border-stone-100 hover:bg-amber-50/40 ${busy ? "opacity-60" : ""}`}>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 cursor-pointer" onClick={() => setEditItem(item)} title="Click to edit / delete">
                         {item.default_photo ? (
                           <img src={item.default_photo} alt=""
                             className="w-10 h-10 object-cover rounded border border-stone-200" />
@@ -397,7 +401,9 @@ export default function NeedsLocations() {
                       <td className="px-3 py-2 text-stone-600 truncate max-w-[160px]" title={item._mfg_name}>
                         {item._mfg_name || "—"}
                       </td>
-                      <td className="px-3 py-2 font-medium text-stone-800 truncate max-w-[320px]" title={item.name}>
+                      <td className="px-3 py-2 font-medium text-stone-800 truncate max-w-[320px] cursor-pointer hover:text-amber-700 hover:underline"
+                        onClick={() => setEditItem(item)}
+                        title="Click to edit / delete">
                         {item.name || <span className="italic text-stone-400">Unnamed</span>}
                       </td>
                       <td className="px-3 py-2 text-stone-600">{item.size || "—"}</td>
@@ -432,6 +438,22 @@ export default function NeedsLocations() {
           </>
         )}
       </div>
+
+      {editItem && (
+        <ItemModal
+          item={editItem}
+          categories={data?.categories || []}
+          depts={data?.depts || []}
+          vendors={data?.vendors || []}
+          units={data?.units || []}
+          onClose={() => setEditItem(null)}
+          onSave={() => { setEditItem(null); load(); }}
+          onDelete={(deletedId) => {
+            setItems(prev => prev.filter(i => i.id !== deletedId));
+            setEditItem(null);
+          }}
+        />
+      )}
     </div>
   );
 }

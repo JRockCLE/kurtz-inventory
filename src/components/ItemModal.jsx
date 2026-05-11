@@ -92,7 +92,7 @@ function normalizeItem(item, vendorMap, deptMap, catMap) {
   };
 }
 
-export default function ItemModal({ item, categories, depts, vendors, units, onSave, onClose }) {
+export default function ItemModal({ item, categories, depts, vendors, units, onSave, onClose, onDelete }) {
   const barcodeRef = useRef(null);
 
   const vendorMap = Object.fromEntries((vendors || []).map(v => [v.Vendor_ID, v.Vendor_Name_TX]));
@@ -158,6 +158,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
   };
 
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [upcChecking, setUpcChecking] = useState(false);
   const [upcMatch, setUpcMatch] = useState(null);
   const [upcChecked, setUpcChecked] = useState(isEdit);
@@ -258,6 +259,23 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
       onSave();
     } catch (err) { alert("Error: " + err.message); }
     setSaving(false);
+  };
+
+  const handleDelete = async () => {
+    if (!isEdit || !normalized.localId) return;
+    if (!confirm(`Delete "${f.name || f.upc}"?\n\nThis will mark the item inactive and remove it from all lists.`)) return;
+    setDeleting(true);
+    try {
+      await qry("local_items", {
+        schema: "public",
+        update: { active_yn: "N", updated_at: new Date().toISOString() },
+        match: { id: normalized.localId },
+      });
+      onDelete?.(normalized.localId);
+    } catch (err) {
+      alert("Error deleting: " + err.message);
+      setDeleting(false);
+    }
   };
 
   const ic = "w-full px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent";
@@ -447,11 +465,19 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
           </div>
         </div>
 
-        <div className="flex items-center justify-between px-5 py-4 border-t border-stone-200 bg-stone-50 rounded-b-xl">
-          <div className="text-xs text-stone-400">{isEdit ? "Editing local item" : "New items are saved locally until synced to POS"}</div>
+        <div className="flex items-center justify-between px-5 py-4 border-t border-stone-200 bg-stone-50 rounded-b-xl gap-3">
+          <div className="flex items-center gap-3">
+            {isEdit && onDelete && (
+              <button onClick={handleDelete} disabled={saving || deleting}
+                className="px-3 py-2 text-sm text-red-600 hover:text-white hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-lg font-medium transition-colors disabled:opacity-50">
+                {deleting ? "Deleting..." : "Delete"}
+              </button>
+            )}
+            <div className="text-[11px] text-stone-400 hidden md:block">{isEdit ? "Editing local item" : "New items are saved locally until synced to POS"}</div>
+          </div>
           <div className="flex items-center gap-3">
             <button onClick={onClose} className="px-4 py-2 text-sm text-stone-600 hover:text-stone-800">Cancel</button>
-            <button onClick={save} disabled={saving || !canSave}
+            <button onClick={save} disabled={saving || deleting || !canSave}
               className={`px-5 py-2 rounded-lg text-sm font-bold transition-colors ${canSave ? "bg-amber-600 text-white hover:bg-amber-700" : "bg-stone-200 text-stone-400 cursor-not-allowed"}`}>
               {saving ? "Saving..." : isEdit ? "Save Changes" : "Add Item"}
             </button>
