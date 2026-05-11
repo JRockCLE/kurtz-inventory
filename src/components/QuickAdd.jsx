@@ -116,19 +116,24 @@ export default function QuickAdd() {
     setStatus({ type: "notfound", message: `Not found in system or StoreLIVE`, upc });
   };
 
-  // ─── Assign location (found/created items) ───
+  // ─── Save item (location optional — can be assigned later in "Needs Locations") ───
   const assignLocation = async () => {
-    if (!location || !status?.item) return;
+    if (!status?.item) return;
     setSaving(true);
     try {
       const itemId = status.item.id;
-      const existingLocs = await qry("local_item_locations", {
-        select: "id", filters: `local_item_id=eq.${itemId}`, limit: 1,
-      });
-      const isFirst = !existingLocs.length;
-      try { await addItemLocation(itemId, location, isFirst); } catch { /* dup */ }
+      const trimmedLoc = location?.trim();
       const itemUpdate = {};
-      if (isFirst) itemUpdate.warehouse_location = location;
+
+      if (trimmedLoc) {
+        const existingLocs = await qry("local_item_locations", {
+          select: "id", filters: `local_item_id=eq.${itemId}`, limit: 1,
+        });
+        const isFirst = !existingLocs.length;
+        try { await addItemLocation(itemId, trimmedLoc, isFirst); } catch { /* dup */ }
+        if (isFirst) itemUpdate.warehouse_location = trimmedLoc;
+      }
+
       if (expDate) itemUpdate.expiration_date = expDate;
       if (caseSize) itemUpdate.case_size = parseInt(caseSize);
       if (productType && productType !== status.item.product_type) itemUpdate.product_type = productType;
@@ -142,7 +147,7 @@ export default function QuickAdd() {
         }
         // Merge with any existing photos
         try {
-          const [existing] = await qry("local_items", { select: "photos", filters: `id=eq.${itemId}`, limit: 1 });
+          const [existing] = await qry("local_items", { select: "photos,default_photo", filters: `id=eq.${itemId}`, limit: 1 });
           const prev = existing?.photos || [];
           itemUpdate.photos = [...prev, ...photoUrls];
           if (!existing?.default_photo) itemUpdate.default_photo = photoUrls[0];
@@ -155,7 +160,12 @@ export default function QuickAdd() {
       if (Object.keys(itemUpdate).length) {
         await qry("local_items", { update: itemUpdate, match: { id: itemId } });
       }
-      setLog(prev => [{ name: status.item.name, upc: status.upc, location, type: "assigned", time: new Date() }, ...prev].slice(0, 50));
+      setLog(prev => [{
+        name: status.item.name, upc: status.upc,
+        location: trimmedLoc || "—",
+        type: trimmedLoc ? "assigned" : "saved-no-loc",
+        time: new Date(),
+      }, ...prev].slice(0, 50));
       resetForm();
     } catch (err) {
       setStatus({ ...status, type: "error", message: `Error: ${err.message}` });
@@ -351,12 +361,15 @@ export default function QuickAdd() {
                 </div>
               </div>
 
-              <div className="flex gap-2">
-                <button onClick={assignLocation} disabled={saving || !location}
+              <div className="flex items-center gap-2">
+                <button onClick={assignLocation} disabled={saving}
                   className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
-                  {saving ? "Saving..." : "Save"}
+                  {saving ? "Saving..." : (location ? "Save" : "Save (no location)")}
                 </button>
                 <button onClick={resetForm} className="px-3 py-2 text-sm text-stone-500 hover:text-stone-700">Cancel</button>
+                {!location && (
+                  <span className="text-[11px] text-stone-400 italic">Assign location later in <span className="font-semibold">Needs Locations</span></span>
+                )}
               </div>
             </div>
           )}
