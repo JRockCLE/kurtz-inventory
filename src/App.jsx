@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRefData, useOrders } from "./lib/hooks";
 import Items from "./components/Items";
 import ReceivingList from "./components/ReceivingList";
@@ -8,9 +8,18 @@ import Orders from "./components/Orders";
 import PickList from "./components/PickList";
 import ItemModal from "./components/ItemModal";
 import Settings from "./components/Settings";
+import ScanHub from "./components/scans/ScanHub";
 
 export default function App() {
-  const [tab, setTab] = useState("receiving");
+  // Initial tab honors a hash like #scans for PWA install entry
+  const initialTab = () => {
+    if (typeof window === "undefined") return "receiving";
+    const h = window.location.hash.replace("#", "");
+    const valid = ["receiving", "items", "needs", "orders", "scans", "settings"];
+    return valid.includes(h) ? h : "receiving";
+  };
+
+  const [tab, setTab] = useState(initialTab);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedRecvDoc, setSelectedRecvDoc] = useState(null);
   const [editItem, setEditItem] = useState(null);
@@ -19,6 +28,15 @@ export default function App() {
   const data = useRefData();
   const { orders, loading: ordersLoading, refresh: refreshOrders } = useOrders();
 
+  // Keep the URL hash in sync with current tab so refresh / share preserves it
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const newHash = `#${tab}`;
+    if (window.location.hash !== newHash) {
+      window.history.replaceState(null, "", newHash);
+    }
+  }, [tab]);
+
   const pendingCount = orders.filter(o => o.status === "submitted" || o.status === "picking").length;
 
   const tabs = [
@@ -26,10 +44,17 @@ export default function App() {
     { id: "items", label: "Items", emoji: "🏷️" },
     { id: "needs", label: "Store Lists", emoji: "📋" },
     { id: "orders", label: "Pick Lists", emoji: "🚛", badge: pendingCount },
+    // { id: "scans", label: "Scans", emoji: "📁" }, // hidden until Scans is production-ready
   ];
 
   const handleEditItem = (item) => { setEditItem(item); setShowEditModal(true); };
   const handleEditSave = () => { setShowEditModal(false); setEditItem(null); setItemsRefresh(t => t + 1); data.refresh(); };
+
+  const switchTab = (newTab) => {
+    setTab(newTab);
+    setSelectedOrder(null);
+    setSelectedRecvDoc(null);
+  };
 
   if (data.loading) {
     return (
@@ -52,7 +77,7 @@ export default function App() {
         <div className="flex">
           {tabs.map(t => (
             <button key={t.id}
-              onClick={() => { setTab(t.id); setSelectedOrder(null); setSelectedRecvDoc(null); }}
+              onClick={() => switchTab(t.id)}
               className={`px-5 py-2.5 text-sm font-medium flex items-center gap-1.5 border-b-2 transition-colors ${
                 tab === t.id ? "border-amber-500 text-white bg-stone-700" : "border-transparent text-stone-400 hover:text-white hover:bg-stone-700/50"
               }`}>
@@ -61,7 +86,7 @@ export default function App() {
             </button>
           ))}
         </div>
-        <button onClick={() => { setTab("settings"); setSelectedOrder(null); setSelectedRecvDoc(null); }}
+        <button onClick={() => switchTab("settings")}
           className={`px-4 py-2.5 text-sm transition-colors ${tab === "settings" ? "text-white" : "text-stone-400 hover:text-white"}`}
           title="Settings">
           Settings
@@ -77,9 +102,10 @@ export default function App() {
             onBack={() => setSelectedRecvDoc(null)} onUpdate={() => setItemsRefresh(t => t + 1)} />
         )}
         {tab === "items" && <Items data={data} onEdit={handleEditItem} refreshTick={itemsRefresh} />}
-        {tab === "needs" && <StoreNeeds data={data} onSubmitOrder={() => { setTab("orders"); refreshOrders(); }} />}
+        {tab === "needs" && <StoreNeeds data={data} onSubmitOrder={() => { switchTab("orders"); refreshOrders(); }} />}
         {tab === "orders" && !selectedOrder && <Orders orders={orders} loading={ordersLoading} onSelect={id => setSelectedOrder(id)} />}
         {tab === "orders" && selectedOrder && <PickList orderId={selectedOrder} data={data} onBack={() => { setSelectedOrder(null); refreshOrders(); }} onUpdate={refreshOrders} />}
+        {tab === "scans" && <ScanHub />}
         {tab === "settings" && <Settings />}
       </div>
 

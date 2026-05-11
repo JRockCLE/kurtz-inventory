@@ -42,44 +42,77 @@ export async function qry(table, { schema = "public", select, filters, order, in
 }
 
 // ─── Barcode lookup against StoreLIVE ───
+// Reads posbe."UPC" + posbe."Item" + related tables directly. The denormalized
+// posbe.v_items table is populated by the mini-PC sync engine on a delay (and
+// sometimes silently drops new items), so going to the source tables makes
+// brand-new items findable the moment UPC+Item rows land.
 export async function lookupBarcode(barcode) {
   if (!barcode || barcode.length < 3) return null;
+  const h = sbH("posbe");
 
-  // Query v_items view (has all fields including unit and sub-category)
   try {
-    const res = await fetch(
-      `${SB_URL}/rest/v1/v_items?UPC_TX=eq.${encodeURIComponent(barcode)}&select=Item_ID,Name_TX,Store_Name_TX,Size_TX,Mfg_ID,Mfg_Name,Category_ID,Category_Name,Dept_ID,Dept_Name,Sub_Category_ID,Price,Ref_Unit_CD,Unit_Name&limit=1`,
-      { headers: sbH("posbe") }
-    );
-    if (res.ok) {
-      const data = await res.json();
-      if (data.length > 0) {
-        const r = data[0];
-        // Resolve sub-category name if we have an ID
-        let subCatName = null;
-        if (r.Sub_Category_ID && r.Sub_Category_ID > 0) {
-          try {
-            const sc = await fetch(
-              `${SB_URL}/rest/v1/Sub_Category?Sub_Category_ID=eq.${r.Sub_Category_ID}&select=Name_TX&limit=1`,
-              { headers: sbH("posbe") }
-            );
-            if (sc.ok) { const scd = await sc.json(); if (scd.length) subCatName = scd[0].Name_TX; }
-          } catch { /* ignore */ }
-        }
-        return {
-          item_id: r.Item_ID, name: r.Name_TX, store_name: r.Store_Name_TX,
-          size: r.Size_TX, mfg_id: r.Mfg_ID, mfg_name: r.Mfg_Name,
-          category_id: r.Category_ID, category_name: r.Category_Name,
-          dept_id: r.Dept_ID, dept_name: r.Dept_Name,
-          sub_category_id: r.Sub_Category_ID || null, sub_category_name: subCatName,
-          price: r.Price,
-          unit_cd: r.Ref_Unit_CD || null, unit_name: r.Unit_Name || null, source: "posbe",
-        };
-      }
-    }
-  } catch (e) { console.error("Fallback lookup failed:", e); }
+    const upcRows = await fetch(
+      `${SB_URL}/rest/v1/UPC?UPC_TX=eq.${encodeURIComponent(barcode)}&Activ_YN=eq.Y&select=Item_ID,Primary_YN&order=Primary_YN.desc&limit=1`,
+      { headers: h }
+    ).then(r => r.ok ? r.json() : []);
+    if (!upcRows.length) return null;
+    const itemId = upcRows[0].Item_ID;
 
-  return null;
+    const itemRows = await fetch(
+      `${SB_URL}/rest/v1/Item?Item_ID=eq.${itemId}&Activ_YN=eq.Y&select=Item_ID,Name_TX,Store_Name_TX,Size_TX,Category_ID,Sub_Category_ID,Mfg_ID,Ref_Unit_CD&limit=1`,
+      { headers: h }
+    ).then(r => r.ok ? r.json() : []);
+    if (!itemRows.length) return null;
+    const it = itemRows[0];
+
+    const fetchJson = (url) => fetch(url, { headers: h }).then(r => r.ok ? r.json() : []).catch(() => []);
+
+    const [cats, mfgs, subCats, units, prices] = await Promise.all([
+      it.Category_ID
+        ? fetchJson(`${SB_URL}/rest/v1/Category?Category_ID=eq.${it.Category_ID}&select=Category_ID,Dept_ID,Name_TX&limit=1`)
+        : Promise.resolve([]),
+      it.Mfg_ID
+        ? fetchJson(`${SB_URL}/rest/v1/Vendor?Vendor_ID=eq.${it.Mfg_ID}&select=Vendor_ID,Vendor_Name_TX&limit=1`)
+        : Promise.resolve([]),
+      it.Sub_Category_ID && it.Sub_Category_ID > 0
+        ? fetchJson(`${SB_URL}/rest/v1/Sub_Category?Sub_Category_ID=eq.${it.Sub_Category_ID}&select=Name_TX&limit=1`)
+        : Promise.resolve([]),
+      it.Ref_Unit_CD
+        ? fetchJson(`${SB_URL}/rest/v1/Ref_Units?Unit_ID=eq.${it.Ref_Unit_CD}&select=Unit_ID,Unit_Name_TX&limit=1`)
+        : Promise.resolve([]),
+      fetchJson(`${SB_URL}/rest/v1/Price?Item_ID=eq.${itemId}&Activ_YN=eq.Y&Ref_Price_CD=eq.SLPRC&End_Time_DT=is.null&select=Amnt_NR,Start_Time_DT&order=Start_Time_DT.desc&limit=1`),
+    ]);
+
+    const cat = cats[0] || null;
+    const deptId = cat?.Dept_ID || null;
+    let deptName = null;
+    if (deptId) {
+      const d = await fetchJson(`${SB_URL}/rest/v1/Dept?Dept_ID=eq.${deptId}&select=Name_TX&limit=1`);
+      deptName = d[0]?.Name_TX || null;
+    }
+
+    return {
+      item_id: it.Item_ID,
+      name: it.Name_TX,
+      store_name: it.Store_Name_TX,
+      size: it.Size_TX,
+      mfg_id: it.Mfg_ID,
+      mfg_name: mfgs[0]?.Vendor_Name_TX || null,
+      category_id: it.Category_ID,
+      category_name: cat?.Name_TX || null,
+      dept_id: deptId,
+      dept_name: deptName,
+      sub_category_id: it.Sub_Category_ID && it.Sub_Category_ID > 0 ? it.Sub_Category_ID : null,
+      sub_category_name: subCats[0]?.Name_TX || null,
+      price: prices[0]?.Amnt_NR ?? null,
+      unit_cd: it.Ref_Unit_CD || null,
+      unit_name: units[0]?.Unit_Name_TX || null,
+      source: "posbe",
+    };
+  } catch (e) {
+    console.error("lookupBarcode failed:", e);
+    return null;
+  }
 }
 
 // ─── Check if barcode already exists in OUR system (returns ALL matches) ───
