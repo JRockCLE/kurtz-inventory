@@ -470,7 +470,26 @@ export default function NeedsLocations({ data }) {
           vendors={data?.vendors || []}
           units={data?.units || []}
           onClose={() => setEditItem(null)}
-          onSave={() => { setEditItem(null); load(); }}
+          onSave={async () => {
+            const savedId = editItem.id;
+            const carryMfg = editItem._mfg_name;
+            setEditItem(null);
+            try {
+              const [full] = await qry("local_items", {
+                select: "*",
+                filters: `id=eq.${savedId}`,
+                limit: 1,
+              });
+              if (!full || full.active_yn !== "Y" || full.warehouse_location) {
+                // No longer belongs in Needs Locations (got a location, was deactivated, or vanished)
+                setItems(prev => prev.filter(i => i.id !== savedId));
+              } else {
+                setItems(prev => prev.map(i => i.id === savedId ? { ...full, _mfg_name: carryMfg } : i));
+              }
+            } catch (err) {
+              console.error("Refresh-after-save failed:", err);
+            }
+          }}
           onDelete={(deletedId) => {
             setItems(prev => prev.filter(i => i.id !== deletedId));
             setEditItem(null);

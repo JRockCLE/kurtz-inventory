@@ -20,7 +20,13 @@ async function checkUpcExists(upc) {
 
 // ─── Normalize item data from different sources ───
 function normalizeItem(item, vendorMap, deptMap, catMap) {
-  if (!item) return {};
+  if (!item) return {
+    upc: "", mfg_id: "", mfg_name: "", name: "", size: "", expDate: null,
+    dept_id: "", dept_name: "", category_id: "", category_name: "",
+    sub_category_id: "", ref_unit_cd: "", price: "", cost: "", case_size: "",
+    cases_on_hand: 0, warehouse_location: "", store_location: "", notes: "",
+    product_type: "dry", localId: null, source: "new",
+  };
 
   // Check if it's a POS v_items row (uppercase keys)
   if (item.Name_TX !== undefined) {
@@ -164,6 +170,9 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
   const [upcMatch, setUpcMatch] = useState(null);
   const [upcChecked, setUpcChecked] = useState(isEdit);
   const [upcTimer, setUpcTimer] = useState(null);
+  const [noBarcode, setNoBarcode] = useState(false);
+  // Draft locations for new-item creation (LocationsManager only works for existing rows).
+  const [draftLocations, setDraftLocations] = useState([""]);
 
   useEffect(() => {
     if (!isEdit && barcodeRef.current) setTimeout(() => barcodeRef.current?.focus(), 100);
@@ -212,7 +221,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
     }
   };
 
-  const canSave = f.name.trim() && f.upc.trim() && !upcMatch;
+  const canSave = f.name.trim() && (noBarcode || (f.upc.trim() && !upcMatch));
 
   const save = async () => {
     if (!canSave) return;
@@ -228,8 +237,12 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
       }
       const defPhoto = defaultPhoto && allPhotos.includes(defaultPhoto) ? defaultPhoto : (allPhotos[0] || null);
 
+      // In create mode, the primary warehouse_location is the first non-empty draft location.
+      const trimmedDrafts = isEdit ? [] : draftLocations.map(s => s.trim()).filter(Boolean);
+      const primaryLocation = isEdit ? (f.warehouse_location.trim() || null) : (trimmedDrafts[0] || null);
+
       const payload = {
-        upc: f.upc.trim(),
+        upc: noBarcode ? null : (f.upc.trim() || null),
         mfg_id: f.mfg_id ? parseInt(f.mfg_id) : null,
         name: f.name.trim(),
         size: f.size.trim() || null,
@@ -242,7 +255,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
         cost: f.case_cost && f.case_size ? parseFloat((parseFloat(f.case_cost) / parseInt(f.case_size)).toFixed(2)) : null,
         case_size: f.case_size ? parseInt(f.case_size) : null,
         cases_on_hand: parseInt(f.cases_on_hand) || 0,
-        warehouse_location: f.warehouse_location.trim() || null,
+        warehouse_location: primaryLocation,
         store_location: f.store_location.trim() || null,
         notes: f.notes.trim() || null,
         product_type: f.product_type || "dry",
@@ -253,9 +266,18 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
       if (isEdit && normalized.localId) {
         await qry("local_items", { schema: "public", update: payload, match: { id: normalized.localId } });
       } else {
-        payload.sync_status = "local";
+        // No-barcode items can never go to StoreLIVE (POSBe needs a UPC). Mark them
+        // local_only so they don't appear in the sync queue.
+        payload.sync_status = noBarcode ? "local_only" : "local";
+        payload.from_posbe = false;
         payload.created_by = "Store";
-        await qry("local_items", { schema: "public", insert: payload });
+        const [created] = await qry("local_items", { schema: "public", insert: payload });
+        // Persist any additional locations beyond the primary
+        if (created?.id && trimmedDrafts.length) {
+          for (let i = 0; i < trimmedDrafts.length; i++) {
+            try { await addItemLocation(created.id, trimmedDrafts[i], i === 0, i); } catch { /* dup */ }
+          }
+        }
       }
       onSave();
     } catch (err) { alert("Error: " + err.message); }
@@ -293,11 +315,26 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
         <div className="p-5 space-y-0">
           {/* ─── BARCODE ─── */}
           <div className="pb-4">
-            <label className={lc}>Barcode / UPC *{upcChecking && <span className="ml-2 text-stone-400 font-normal">checking...</span>}</label>
-            <input ref={barcodeRef} className={`${ic} text-lg font-mono tracking-wider ${upcMatch ? "border-red-400 bg-red-50" : upcChecked && !upcMatch && f.upc.length >= 6 ? "border-green-400 bg-green-50" : ""}`}
-              value={f.upc} onChange={e => handleUpcChange(e.target.value)} onKeyDown={handleUpcKeyDown}
-              placeholder="Scan or type barcode..." autoFocus={!isEdit} />
-            {upcMatch && (
+            <div className="flex items-center justify-between mb-1">
+              <label className={`${lc} mb-0`}>
+                Barcode / UPC {!noBarcode && "*"}
+                {upcChecking && <span className="ml-2 text-stone-400 font-normal normal-case">checking...</span>}
+              </label>
+              {!isEdit && (
+                <label className="flex items-center gap-1.5 text-[11px] text-stone-600 cursor-pointer select-none">
+                  <input type="checkbox" checked={noBarcode}
+                    onChange={e => { setNoBarcode(e.target.checked); if (e.target.checked) { setUpcMatch(null); setUpcChecked(false); } }}
+                    className="w-3.5 h-3.5 accent-amber-600" />
+                  No barcode (PLU only)
+                </label>
+              )}
+            </div>
+            <input ref={barcodeRef} disabled={noBarcode}
+              className={`${ic} text-lg font-mono tracking-wider ${noBarcode ? "bg-stone-100 text-stone-400" : ""} ${upcMatch ? "border-red-400 bg-red-50" : upcChecked && !upcMatch && f.upc.length >= 6 ? "border-green-400 bg-green-50" : ""}`}
+              value={noBarcode ? "" : f.upc} onChange={e => handleUpcChange(e.target.value)} onKeyDown={handleUpcKeyDown}
+              placeholder={noBarcode ? "Not used — item has no barcode" : "Scan or type barcode..."}
+              autoFocus={!isEdit && !noBarcode} />
+            {!noBarcode && upcMatch && (
               <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
                 <div className="text-sm font-bold text-red-700 mb-1">This barcode already exists!</div>
                 <div className="text-xs text-red-600 space-y-0.5">
@@ -309,7 +346,8 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
                 </div>
               </div>
             )}
-            {upcChecked && !upcMatch && f.upc.length >= 6 && <div className="mt-1 text-xs text-green-600 font-medium">Barcode is available</div>}
+            {!noBarcode && upcChecked && !upcMatch && f.upc.length >= 6 && <div className="mt-1 text-xs text-green-600 font-medium">Barcode is available</div>}
+            {noBarcode && <div className="mt-1 text-xs text-stone-400 italic">PLU-only item — will stay local and won't sync to StoreLIVE.</div>}
           </div>
 
           {/* ─── PHOTOS ─── */}
@@ -450,14 +488,43 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
                   <LocationsManager localItemId={normalized.localId}
                     onPrimaryChange={(label) => set("warehouse_location", label || "")} />
                 ) : (
-                  <>
-                    <SearchSelect value={f.warehouse_location} displayValue={f.warehouse_location}
-                      fetchOptions={searchLocations}
-                      onSelect={(v) => set("warehouse_location", v || "")}
-                      placeholder="Type to search..." />
-                    <button type="button" onClick={() => set("_showLocModal", true)}
-                      className="text-[11px] text-amber-600 hover:text-amber-700 font-medium mt-1">+ Add new location</button>
-                  </>
+                  <div className="border border-stone-200 rounded-lg bg-white">
+                    <div className="divide-y divide-stone-100">
+                      {draftLocations.map((loc, i) => {
+                        const filledCount = draftLocations.filter(l => l.trim()).length;
+                        return (
+                          <div key={i} className="flex items-center gap-2 px-2 py-1.5">
+                            <span className="text-stone-300 select-none text-[10px] w-4 text-center">{i + 1}</span>
+                            <div className="flex-1 min-w-0">
+                              <SearchSelect value={loc} displayValue={loc}
+                                fetchOptions={searchLocations}
+                                onSelect={(v) => setDraftLocations(prev => prev.map((l, idx) => idx === i ? (v || "") : l))}
+                                placeholder={i === 0 ? "Primary location..." : "Additional location..."} />
+                            </div>
+                            {i === 0 && filledCount > 1 && (
+                              <span className="text-[10px] italic text-amber-600 shrink-0">Primary</span>
+                            )}
+                            {draftLocations.length > 1 && (
+                              <button type="button"
+                                onClick={() => setDraftLocations(prev => prev.filter((_, idx) => idx !== i))}
+                                className="text-stone-300 hover:text-red-500 text-lg leading-none px-1" title="Remove">×</button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="border-t border-stone-100 p-2 flex items-center justify-between gap-2">
+                      <button type="button"
+                        onClick={() => setDraftLocations(prev => [...prev, ""])}
+                        className="text-[11px] font-bold uppercase tracking-wide text-amber-600 hover:text-amber-700">
+                        + Add Location
+                      </button>
+                      <button type="button" onClick={() => set("_showLocModal", true)}
+                        className="text-[11px] text-stone-500 hover:text-stone-700 font-medium">
+                        + Create new
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
               <div><label className={lc}>Store Location</label><input className={ic} value={f.store_location} onChange={e => set("store_location", e.target.value)} placeholder="e.g., Aisle 4" /></div>
@@ -541,7 +608,17 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
       )}
 
       {f._showLocModal && <AddLocationModal ic={ic} lc={lc} onClose={(label) => {
-        if (label) set("warehouse_location", label);
+        if (label) {
+          if (isEdit) {
+            set("warehouse_location", label);
+          } else {
+            setDraftLocations(prev => {
+              const emptyIdx = prev.findIndex(l => !l.trim());
+              if (emptyIdx >= 0) return prev.map((l, i) => i === emptyIdx ? label : l);
+              return [...prev, label];
+            });
+          }
+        }
         set("_showLocModal", false);
       }} />}
     </div>

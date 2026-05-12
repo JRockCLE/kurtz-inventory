@@ -48,6 +48,7 @@ export default function App() {
   ];
 
   const handleEditItem = (item) => { setEditItem(item); setShowEditModal(true); };
+  const handleAddItem = () => { setEditItem(null); setShowEditModal(true); };
   const handleEditSave = () => { setShowEditModal(false); setEditItem(null); setItemsRefresh(t => t + 1); data.refresh(); };
 
   const switchTab = (newTab) => {
@@ -101,7 +102,7 @@ export default function App() {
           <ReceivingDoc docId={selectedRecvDoc} data={data}
             onBack={() => setSelectedRecvDoc(null)} onUpdate={() => setItemsRefresh(t => t + 1)} />
         )}
-        {tab === "items" && <Items data={data} onEdit={handleEditItem} refreshTick={itemsRefresh} />}
+        {tab === "items" && <Items data={data} onEdit={handleEditItem} onAdd={handleAddItem} refreshTick={itemsRefresh} />}
         {tab === "needs" && <StoreNeeds data={data} onSubmitOrder={() => { switchTab("orders"); refreshOrders(); }} />}
         {tab === "orders" && !selectedOrder && <Orders orders={orders} loading={ordersLoading} onSelect={id => setSelectedOrder(id)} />}
         {tab === "orders" && selectedOrder && <PickList orderId={selectedOrder} data={data} onBack={() => { setSelectedOrder(null); refreshOrders(); }} onUpdate={refreshOrders} />}
@@ -109,7 +110,7 @@ export default function App() {
         {tab === "settings" && <Settings data={data} />}
       </div>
 
-      {showEditModal && editItem && (
+      {showEditModal && (
         <ItemModal item={editItem} categories={data.categories} depts={data.depts} vendors={[]} units={data.units}
           onClose={() => { setShowEditModal(false); setEditItem(null); }} onSave={handleEditSave} />
       )}

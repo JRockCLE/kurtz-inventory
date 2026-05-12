@@ -11,7 +11,7 @@ function measureText(text, font = "500 14px ui-sans-serif, system-ui, sans-serif
   return ctx.measureText(text).width;
 }
 
-export default function Items({ data, onEdit, refreshTick = 0 }) {
+export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [searchTimer, setSearchTimer] = useState(null);
@@ -149,6 +149,12 @@ export default function Items({ data, onEdit, refreshTick = 0 }) {
             <span className="text-xs text-stone-400">
               {total.toLocaleString()} items{totalPages > 1 && ` • Page ${page + 1} of ${totalPages.toLocaleString()}`}
             </span>
+            {onAdd && (
+              <button onClick={onAdd}
+                className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-sm font-bold hover:bg-amber-700">
+                + Add Item
+              </button>
+            )}
             <div className="relative">
               <button onClick={() => setShowPrintMenu(!showPrintMenu)} disabled={printLoading}
                 className="px-3 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-sm hover:bg-stone-200 disabled:opacity-50">
