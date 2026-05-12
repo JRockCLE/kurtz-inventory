@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, uploadPhoto, addItemLocation, getItemLocations, removeItemLocation, SB_URL, SB_KEY } from "../lib/hooks";
+import { imgUrl } from "../lib/helpers";
 import SearchSelect from "./SearchSelect";
 const sbH = (schema = "posbe") => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Accept-Profile": schema, "Content-Profile": schema, "Content-Type": "application/json" });
 
@@ -320,7 +321,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
                   onClick={() => { setLightbox({ idx: i }); setZoom(1); setPan({ x: 0, y: 0 }); }}
                   onDoubleClick={(e) => { e.stopPropagation(); setDefaultPhoto(url); }}
                   title="Click to view, double-click to set as default">
-                  <img src={url} alt="" className="w-full h-full object-cover" />
+                  <img src={imgUrl(url, { width: 200 })} alt="" loading="lazy" className="w-full h-full object-cover" />
                   {defaultPhoto === url && (
                     <div className="absolute bottom-0 inset-x-0 bg-amber-500 text-white text-[9px] text-center font-bold py-0.5">DEFAULT</div>
                   )}
@@ -514,7 +515,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
             onMouseUp={() => { panRef.current = null; }}
             onMouseLeave={() => { panRef.current = null; }}
             style={{ cursor: zoom > 1 ? (panRef.current ? "grabbing" : "grab") : "default" }}>
-            <img src={photos[lightbox.idx]} alt="" draggable={false}
+            <img src={imgUrl(photos[lightbox.idx], { width: 1600 })} alt="" draggable={false}
               className="max-w-full max-h-full object-contain select-none pointer-events-none"
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transition: panRef.current ? "none" : "transform 0.1s" }} />
             {lightbox.idx > 0 && zoom === 1 && (
@@ -531,7 +532,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
               {photos.map((url, i) => (
                 <div key={i} onClick={e => { e.stopPropagation(); setLightbox({ idx: i }); setZoom(1); setPan({ x: 0, y: 0 }); }}
                   className={`w-12 h-12 shrink-0 rounded overflow-hidden cursor-pointer border-2 transition-colors ${i === lightbox.idx ? "border-amber-500" : "border-transparent opacity-60 hover:opacity-100"}`}>
-                  <img src={url} alt="" className="w-full h-full object-cover" />
+                  <img src={imgUrl(url, { width: 120 })} alt="" loading="lazy" className="w-full h-full object-cover" />
                 </div>
               ))}
             </div>

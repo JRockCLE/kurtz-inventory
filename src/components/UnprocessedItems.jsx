@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, addItemLocation } from "../lib/hooks";
-import { splitLocation } from "../lib/helpers";
+import { splitLocation, imgUrl } from "../lib/helpers";
 import SearchSelect from "./SearchSelect";
 
 const TYPE_TO_PREFIX = { dry: "", cooler: "C", freezer: "F" };
@@ -266,7 +266,7 @@ export default function UnprocessedItems() {
                   {photos.map((url, i) => (
                     <div key={i} className="aspect-square rounded-lg overflow-hidden border border-stone-200 cursor-pointer hover:border-amber-400 transition-colors"
                       onClick={() => setLightbox({ photos, idx: i })}>
-                      <img src={url} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" />
+                      <img src={imgUrl(url, { width: 400 })} alt={`Photo ${i + 1}`} loading="lazy" className="w-full h-full object-cover" />
                     </div>
                   ))}
                 </div>
@@ -449,7 +449,7 @@ export default function UnprocessedItems() {
             onMouseUp={() => { panning.current = null; }}
             onMouseLeave={() => { panning.current = null; }}
             style={{ cursor: zoom > 1 ? (panning.current ? "grabbing" : "grab") : "default" }}>
-            <img src={lightbox.photos[lightbox.idx]} alt=""
+            <img src={imgUrl(lightbox.photos[lightbox.idx], { width: 1600 })} alt=""
               draggable={false}
               className="max-w-full max-h-full object-contain rounded select-none pointer-events-none"
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transition: panning.current ? "none" : "transform 0.1s" }} />
@@ -474,7 +474,7 @@ export default function UnprocessedItems() {
               {lightbox.photos.map((url, i) => (
                 <div key={i} onClick={() => setLightbox({ ...lightbox, idx: i })}
                   className={`w-12 h-12 shrink-0 rounded overflow-hidden cursor-pointer border-2 transition-colors ${i === lightbox.idx ? "border-amber-500" : "border-transparent opacity-60 hover:opacity-100"}`}>
-                  <img src={url} alt="" className="w-full h-full object-cover" />
+                  <img src={imgUrl(url, { width: 120 })} alt="" loading="lazy" className="w-full h-full object-cover" />
                 </div>
               ))}
             </div>

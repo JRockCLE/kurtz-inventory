@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { qry, SB_URL, SB_KEY, addItemLocation, searchLocations } from "../lib/hooks";
-import { splitLocation } from "../lib/helpers";
+import { splitLocation, imgUrl } from "../lib/helpers";
 import SearchSelect from "./SearchSelect";
 import ItemModal from "./ItemModal";
 
@@ -327,7 +327,7 @@ export default function NeedsLocations({ data }) {
                     <div className="flex gap-3 cursor-pointer active:bg-amber-50 -mx-3 px-3 py-1 rounded"
                       onClick={() => openEdit(item)}>
                       {item.default_photo ? (
-                        <img src={item.default_photo} alt=""
+                        <img src={imgUrl(item.default_photo, { width: 160 })} alt="" loading="lazy"
                           className="w-14 h-14 object-cover rounded border border-stone-200 shrink-0" />
                       ) : (
                         <div className="w-14 h-14 rounded bg-stone-100 border border-stone-200 shrink-0 flex items-center justify-center text-stone-300 text-xs">No photo</div>
@@ -409,7 +409,7 @@ export default function NeedsLocations({ data }) {
                       className={`border-b border-stone-100 hover:bg-amber-50/40 ${busy ? "opacity-60" : ""}`}>
                       <td className="px-3 py-2 cursor-pointer" onClick={() => openEdit(item)} title="Click to edit / delete">
                         {item.default_photo ? (
-                          <img src={item.default_photo} alt=""
+                          <img src={imgUrl(item.default_photo, { width: 120 })} alt="" loading="lazy"
                             className="w-10 h-10 object-cover rounded border border-stone-200" />
                         ) : (
                           <div className="w-10 h-10 rounded bg-stone-100 border border-stone-200" />

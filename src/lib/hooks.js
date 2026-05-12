@@ -237,29 +237,51 @@ export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", p
   const cfKey = JSON.stringify(colFilters);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    const filters = ["active_yn=eq.Y"];
+    const baseFilters = ["active_yn=eq.Y"];
     const cf = colFilters || {};
 
-    if (search) filters.push(`or=(name.ilike.*${search}*,upc.ilike.*${search}*)`);
-    if (cf.upc) filters.push(`upc=ilike.*${cf.upc}*`);
-    if (cf.name) filters.push(`name=ilike.*${cf.name}*`);
-    if (cf.size) filters.push(`size=ilike.*${cf.size}*`);
-    if (cf.warehouse_location) filters.push(`warehouse_location=ilike.*${cf.warehouse_location}*`);
-    if (productType) filters.push(`product_type=eq.${productType}`);
+    if (cf.upc) baseFilters.push(`upc=ilike.*${cf.upc}*`);
+    if (cf.name) baseFilters.push(`name=ilike.*${cf.name}*`);
+    if (cf.size) baseFilters.push(`size=ilike.*${cf.size}*`);
+    if (cf.warehouse_location) baseFilters.push(`warehouse_location=ilike.*${cf.warehouse_location}*`);
+    if (productType) baseFilters.push(`product_type=eq.${productType}`);
 
-    const filterStr = filters.join("&");
     const needsNaturalSort = sortBy === "warehouse_location";
     const order = needsNaturalSort ? "name.asc" : `${sortBy}.${sortDir}.nullslast`;
     const offset = page * PAGE_SIZE;
 
-    // For warehouse_location sort, fetch all items so we can natural-sort across pages
-    const fetchHeaders = { ...sbH("public"), Prefer: "count=exact" };
-    if (!needsNaturalSort) fetchHeaders.Range = `${offset}-${offset + PAGE_SIZE - 1}`;
+    // Resolve `search` → name OR upc OR mfg_id matching a Vendor whose name contains the term.
+    // Vendor names live in posbe.Vendor (not on local_items), so we look up the IDs first.
+    const resolveSearchClause = async () => {
+      if (!search) return null;
+      let mfgPart = "";
+      try {
+        const res = await fetch(
+          `${SB_URL}/rest/v1/Vendor?Vendor_Name_TX=ilike.*${encodeURIComponent(search)}*&Activ_YN=eq.Y&select=Vendor_ID&limit=200`,
+          { headers: sbH("posbe") }
+        );
+        if (res.ok) {
+          const vendors = await res.json();
+          if (vendors.length) mfgPart = `,mfg_id.in.(${vendors.map(v => v.Vendor_ID).join(",")})`;
+        }
+      } catch { /* fall through with no mfg clause */ }
+      return `or=(name.ilike.*${search}*,upc.ilike.*${search}*${mfgPart})`;
+    };
 
-    fetch(`${SB_URL}/rest/v1/local_items?${filterStr}&order=${order}`, {
-      headers: fetchHeaders,
+    resolveSearchClause().then(searchClause => {
+      if (cancelled) return null;
+      const filters = [...baseFilters];
+      if (searchClause) filters.push(searchClause);
+      const filterStr = filters.join("&");
+
+      const fetchHeaders = { ...sbH("public"), Prefer: "count=exact" };
+      if (!needsNaturalSort) fetchHeaders.Range = `${offset}-${offset + PAGE_SIZE - 1}`;
+
+      return fetch(`${SB_URL}/rest/v1/local_items?${filterStr}&order=${order}`, { headers: fetchHeaders });
     }).then(async res => {
+      if (cancelled || !res) return;
       const range = res.headers.get("content-range");
       if (range) { const t = parseInt(range.split("/")[1]); if (!isNaN(t)) setTotal(t); }
       let data = await res.json();
@@ -302,9 +324,11 @@ export function useLocalItems({ search = "", sortBy = "name", sortDir = "asc", p
         } catch {}
       }
 
-      setItems(list);
-    }).catch(err => { console.error(err); setItems([]); })
-      .finally(() => setLoading(false));
+      if (!cancelled) setItems(list);
+    }).catch(err => { if (!cancelled) { console.error(err); setItems([]); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
   }, [search, sortBy, sortDir, page, cfKey, productType, refreshTick]);
 
   return { items, total, loading, pageSize: PAGE_SIZE };
