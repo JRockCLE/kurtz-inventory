@@ -43,9 +43,10 @@ export const prefixColorClass = (label) => {
 };
 
 // Rewrite a Supabase Storage public URL to go through the image-transform
-// endpoint, which serves a resized JPEG instead of the raw upload. ~7x smaller
-// for typical phone photos.
-export function imgUrl(url, { width, height, quality = 80 } = {}) {
+// endpoint, which serves a resized JPEG instead of the raw upload.
+// `resize=contain` is critical: Supabase defaults to `cover`, which crops the
+// image to fit a default frame even when only one dimension is given.
+export function imgUrl(url, { width, height, quality = 80, resize = "contain" } = {}) {
   if (!url) return url;
   if (!url.includes("/storage/v1/object/")) return url;
   const rendered = url.replace("/storage/v1/object/", "/storage/v1/render/image/");
@@ -53,6 +54,7 @@ export function imgUrl(url, { width, height, quality = 80 } = {}) {
   if (width) params.push(`width=${width}`);
   if (height) params.push(`height=${height}`);
   if (quality) params.push(`quality=${quality}`);
+  if (resize) params.push(`resize=${resize}`);
   return params.length ? `${rendered}?${params.join("&")}` : rendered;
 }
 
