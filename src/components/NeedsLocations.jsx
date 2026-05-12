@@ -106,6 +106,29 @@ export default function NeedsLocations({ data }) {
   const [sortField, setSortField] = useState("created_at");
   const [sortDir, setSortDir] = useState("desc");
   const [editItem, setEditItem] = useState(null);
+  const [openingId, setOpeningId] = useState(null);
+
+  // The list fetch only selects display columns; the modal needs the full row
+  // (photos, dept_id, category_id, cost, notes, etc.). Pull it on demand.
+  const openEdit = async (stub) => {
+    setOpeningId(stub.id);
+    try {
+      const [full] = await qry("local_items", {
+        select: "*",
+        filters: `id=eq.${stub.id}`,
+        limit: 1,
+      });
+      if (full) {
+        if (stub._mfg_name) full._mfg_name = stub._mfg_name;
+        setEditItem(full);
+      } else {
+        alert("Couldn't find item — it may have been deleted.");
+      }
+    } catch (err) {
+      alert("Failed to load item: " + err.message);
+    }
+    setOpeningId(null);
+  };
 
   const onSort = (field) => {
     if (field === sortField) {
@@ -302,7 +325,7 @@ export default function NeedsLocations({ data }) {
                     className={`p-3 bg-white ${busy ? "opacity-60" : ""}`}>
                     {/* Photo + identity — tap to edit */}
                     <div className="flex gap-3 cursor-pointer active:bg-amber-50 -mx-3 px-3 py-1 rounded"
-                      onClick={() => setEditItem(item)}>
+                      onClick={() => openEdit(item)}>
                       {item.default_photo ? (
                         <img src={item.default_photo} alt=""
                           className="w-14 h-14 object-cover rounded border border-stone-200 shrink-0" />
@@ -384,7 +407,7 @@ export default function NeedsLocations({ data }) {
                   return (
                     <tr key={item.id}
                       className={`border-b border-stone-100 hover:bg-amber-50/40 ${busy ? "opacity-60" : ""}`}>
-                      <td className="px-3 py-2 cursor-pointer" onClick={() => setEditItem(item)} title="Click to edit / delete">
+                      <td className="px-3 py-2 cursor-pointer" onClick={() => openEdit(item)} title="Click to edit / delete">
                         {item.default_photo ? (
                           <img src={item.default_photo} alt=""
                             className="w-10 h-10 object-cover rounded border border-stone-200" />
@@ -402,7 +425,7 @@ export default function NeedsLocations({ data }) {
                         {item._mfg_name || "—"}
                       </td>
                       <td className="px-3 py-2 font-medium text-stone-800 truncate max-w-[320px] cursor-pointer hover:text-amber-700 hover:underline"
-                        onClick={() => setEditItem(item)}
+                        onClick={() => openEdit(item)}
                         title="Click to edit / delete">
                         {item.name || <span className="italic text-stone-400">Unnamed</span>}
                       </td>
