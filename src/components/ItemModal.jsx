@@ -325,7 +325,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
                   <input type="checkbox" checked={noBarcode}
                     onChange={e => { setNoBarcode(e.target.checked); if (e.target.checked) { setUpcMatch(null); setUpcChecked(false); } }}
                     className="w-3.5 h-3.5 accent-amber-600" />
-                  No barcode (PLU only)
+                  No barcode
                 </label>
               )}
             </div>
@@ -347,7 +347,6 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
               </div>
             )}
             {!noBarcode && upcChecked && !upcMatch && f.upc.length >= 6 && <div className="mt-1 text-xs text-green-600 font-medium">Barcode is available</div>}
-            {noBarcode && <div className="mt-1 text-xs text-stone-400 italic">PLU-only item — will stay local and won't sync to StoreLIVE.</div>}
           </div>
 
           {/* ─── PHOTOS ─── */}
@@ -513,15 +512,11 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
                         );
                       })}
                     </div>
-                    <div className="border-t border-stone-100 p-2 flex items-center justify-between gap-2">
+                    <div className="border-t border-stone-100 p-2">
                       <button type="button"
                         onClick={() => setDraftLocations(prev => [...prev, ""])}
                         className="text-[11px] font-bold uppercase tracking-wide text-amber-600 hover:text-amber-700">
                         + Add Location
-                      </button>
-                      <button type="button" onClick={() => set("_showLocModal", true)}
-                        className="text-[11px] text-stone-500 hover:text-stone-700 font-medium">
-                        + Create new
                       </button>
                     </div>
                   </div>
