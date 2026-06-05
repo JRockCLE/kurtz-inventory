@@ -51,7 +51,7 @@ function ScanHubLauncher() {
           Document scanning lives in its own installable app. Open it in a new tab — your browser will offer to install it to your desktop / taskbar so you can launch it like a native app.
         </p>
         <div className="flex justify-center gap-2">
-          <a href="/scans.html" target="_blank" rel="noopener"
+          <a href="/scans" target="_blank" rel="noopener"
             className="px-5 py-2.5 bg-stone-800 text-white rounded-lg text-sm font-bold hover:bg-stone-900 transition-colors">
             Open Scan Hub →
           </a>
