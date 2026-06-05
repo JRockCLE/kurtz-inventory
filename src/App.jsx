@@ -8,14 +8,12 @@ import Orders from "./components/Orders";
 import PickList from "./components/PickList";
 import ItemModal from "./components/ItemModal";
 import Settings from "./components/Settings";
-import ScanHub from "./components/scans/ScanHub";
 
 export default function App() {
-  // Initial tab honors a hash like #scans for PWA install entry
   const initialTab = () => {
     if (typeof window === "undefined") return "receiving";
     const h = window.location.hash.replace("#", "");
-    const valid = ["receiving", "items", "needs", "orders", "scans", "settings"];
+    const valid = ["receiving", "items", "needs", "orders", "settings"];
     return valid.includes(h) ? h : "receiving";
   };
 
@@ -44,7 +42,7 @@ export default function App() {
     { id: "items", label: "Items", emoji: "🏷️" },
     { id: "needs", label: "Store Lists", emoji: "📋" },
     { id: "orders", label: "Pick Lists", emoji: "🚛", badge: pendingCount },
-    // { id: "scans", label: "Scans", emoji: "📁" }, // hidden until Scans is production-ready
+    // Scans lives as a separate PWA at /scans.html — not surfaced on the main top nav.
   ];
 
   const handleEditItem = (item) => { setEditItem(item); setShowEditModal(true); };
@@ -106,7 +104,6 @@ export default function App() {
         {tab === "needs" && <StoreNeeds data={data} onSubmitOrder={() => { switchTab("orders"); refreshOrders(); }} />}
         {tab === "orders" && !selectedOrder && <Orders orders={orders} loading={ordersLoading} onSelect={id => setSelectedOrder(id)} />}
         {tab === "orders" && selectedOrder && <PickList orderId={selectedOrder} data={data} onBack={() => { setSelectedOrder(null); refreshOrders(); }} onUpdate={refreshOrders} />}
-        {tab === "scans" && <ScanHub />}
         {tab === "settings" && <Settings data={data} />}
       </div>
 

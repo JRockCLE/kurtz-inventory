@@ -1,0 +1,17 @@
+{
+  "id": "/kurtz-inventory",
+  "name": "Kurtz Inventory",
+  "short_name": "Kurtz",
+  "description": "Warehouse inventory management for Kurtz Discount Groceries",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#d97706",
+  "background_color": "#fafaf9",
+  "icons": [
+    { "src": "/icon-inventory-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-inventory-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-inventory-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
