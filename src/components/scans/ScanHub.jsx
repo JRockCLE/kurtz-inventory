@@ -21,7 +21,14 @@ export default function ScanHub() {
     return <NewScanFlow onComplete={(id) => goToDetail(id)} onCancel={goToList} />;
   }
   if (view === "detail" && selectedId) {
-    return <ScanDetail scanId={selectedId} onBack={goToList} onDeleted={goToList} />;
+    return (
+      <ScanDetail
+        scanId={selectedId}
+        onBack={goToList}
+        onDeleted={goToList}
+        onRescan={() => { setSelectedId(null); setView("new"); }}
+      />
+    );
   }
   return <ScanList onSelect={goToDetail} onNew={goToNew} />;
 }
@@ -130,7 +137,20 @@ function ScanList({ onSelect, onNew }) {
                 <div className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 px-1">{g.label}</div>
                 <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
                   {g.scans.map(scan => (
-                    <ScanCard key={scan.id} scan={scan} onClick={() => onSelect(scan.id)} />
+                    <ScanCard
+                      key={scan.id}
+                      scan={scan}
+                      onClick={() => onSelect(scan.id)}
+                      onDelete={async () => {
+                        if (!confirm(`Delete "${scan.title}" and its ${scan.page_count} page${scan.page_count === 1 ? "" : "s"}? This cannot be undone.`)) return;
+                        try {
+                          await scansApi.hardDelete(scan.id);
+                          setScans(prev => prev.filter(s => s.id !== scan.id));
+                        } catch (e) {
+                          alert(`Delete failed: ${e.message}`);
+                        }
+                      }}
+                    />
                   ))}
                 </div>
               </div>
@@ -144,8 +164,7 @@ function ScanList({ onSelect, onNew }) {
 
 // ─── ScanCard ───────────────────────────────────────────────────────
 
-function ScanCard({ scan, onClick }) {
-  // Get the first page for preview
+function ScanCard({ scan, onClick, onDelete }) {
   const [firstPage, setFirstPage] = useState(null);
   const [loadingPage, setLoadingPage] = useState(true);
 
@@ -158,11 +177,28 @@ function ScanCard({ scan, onClick }) {
     return () => { cancelled = true; };
   }, [scan.id]);
 
+  const handleKey = (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+  };
+
   return (
-    <button
+    <div
       onClick={onClick}
-      className="text-left bg-white border border-stone-200 rounded-xl p-4 hover:border-amber-400 hover:shadow-md transition-all group"
+      onKeyDown={handleKey}
+      role="button"
+      tabIndex={0}
+      className="relative text-left bg-white border border-stone-200 rounded-xl p-4 hover:border-amber-400 hover:shadow-md transition-all cursor-pointer group focus:outline-none focus:ring-2 focus:ring-amber-400"
     >
+      {/* Delete — appears on hover (desktop), subtly visible always (touch) */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete?.(); }}
+        title="Delete scan"
+        className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center text-stone-400 hover:text-white hover:bg-red-500 transition-all
+                   opacity-30 group-hover:opacity-100 focus:opacity-100 focus:outline-none"
+      >
+        <span className="text-base leading-none">🗑</span>
+      </button>
+
       <div className="flex gap-3">
         {/* Thumbnail */}
         <div className="flex-shrink-0">
@@ -177,7 +213,7 @@ function ScanCard({ scan, onClick }) {
 
         {/* Body */}
         <div className="flex-1 min-w-0">
-          <div className="font-bold text-sm text-stone-800 truncate group-hover:text-amber-700 transition-colors">
+          <div className="font-bold text-sm text-stone-800 truncate group-hover:text-amber-700 transition-colors pr-8">
             {scan.title}
           </div>
           <div className="text-xs text-stone-400 mt-0.5">
@@ -207,7 +243,7 @@ function ScanCard({ scan, onClick }) {
           </div>
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 

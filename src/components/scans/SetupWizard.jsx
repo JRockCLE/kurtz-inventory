@@ -10,7 +10,9 @@ import { scanAgent, isMockMode, setMockMode, getUserName, setUserName } from "..
  *   onCancel:   () => void — optional, used when re-entering settings
  *   initialConfig: existing config to pre-fill (when editing)
  */
-export default function SetupWizard({ onComplete, onCancel, initialConfig }) {
+export default function SetupWizard({ onComplete, onCancel, initialConfig, mode = "settings" }) {
+  // mode = "scan"     → shown before every scan; button = "Save & Start Scanning"
+  // mode = "settings" → user opened from settings; button = "Save Changes"
   const [scanners, setScanners] = useState([]);
   const [scannerId, setScannerId] = useState(initialConfig?.defaultScanner?.id || "");
   const [source, setSource] = useState(initialConfig?.defaultSource || "Flatbed");
@@ -92,11 +94,15 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig }) {
     <div className="max-w-2xl mx-auto p-8">
       <div className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden">
         <div className="bg-stone-800 text-white px-6 py-4">
-          <h2 className="text-lg font-bold">{initialConfig?.configured ? "Scan Settings" : "Set Up Scanning"}</h2>
+          <h2 className="text-lg font-bold">
+            {mode === "scan" ? "New Scan" : initialConfig?.configured ? "Scan Settings" : "Set Up Scanning"}
+          </h2>
           <p className="text-xs text-stone-300 mt-0.5">
-            {initialConfig?.configured
-              ? "Update the default scanner and quality settings for this computer."
-              : "First time on this computer? Pick a scanner and your defaults — you can change these later."}
+            {mode === "scan"
+              ? "Review your settings, then start the scan. Changes save as the new defaults."
+              : initialConfig?.configured
+                ? "Update the default scanner and quality settings for this computer."
+                : "First time on this computer? Pick a scanner and your defaults — you can change these later."}
           </p>
         </div>
 
@@ -227,7 +233,7 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig }) {
                   : "bg-amber-600 text-white hover:bg-amber-700"
               }`}
             >
-              {saving ? "Saving..." : initialConfig?.configured ? "Save Changes" : "Save & Start Scanning"}
+              {saving ? "Saving..." : mode === "scan" ? "Save & Start Scanning" : initialConfig?.configured ? "Save Changes" : "Save & Start Scanning"}
             </button>
           </div>
         </div>
