@@ -195,11 +195,6 @@ public class ScannerService
     private static ScannerInfo BuildScannerInfo(dynamic info)
     {
         dynamic? infoProps = null;
-        dynamic? device = null;
-        dynamic? deviceItems = null;
-        dynamic? firstItem = null;
-        dynamic? itemProps = null;
-        dynamic? devProps = null;
         try
         {
             infoProps = info.Properties;
@@ -207,49 +202,27 @@ public class ScannerService
             string? manufacturer = SafeGetStringByName(infoProps, "Manufacturer");
             string deviceId = (string)info.DeviceID;
 
-            int caps = 0;
-            try
-            {
-                device = info.Connect();
-                if (device is not null)
-                {
-                    deviceItems = device.Items;
-                    if (deviceItems is not null && deviceItems.Count > 0)
-                    {
-                        firstItem = deviceItems![1];
-                        itemProps = firstItem.Properties;
-                        caps = SafeGetIntById(itemProps, WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES);
-                        if (caps == 0)
-                        {
-                            devProps = device.Properties;
-                            caps = SafeGetIntById(devProps, WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"Could not read caps for '{name}': {ex.Message}");
-            }
-
-            bool capsUnknown = caps == 0;
+            // IMPORTANT: do NOT call info.Connect() here. WIA's Connect() on a
+            // registered-but-offline network device (e.g. a printer at a
+            // previous office) blocks for 30-60 seconds before throwing, which
+            // makes enumeration time out and pile up scanner_busy responses
+            // for every concurrent caller. We previously called Connect just
+            // to read the document-handling capabilities for UX hints
+            // (ADF/Flatbed/Duplex), but those are also discovered at scan time
+            // when Connect happens for real — so we mark them as "available"
+            // at enumeration and let the actual scan call surface any mismatch.
             return new ScannerInfo
             {
                 Id           = deviceId,
                 DisplayName  = name,
                 Manufacturer = manufacturer,
-                HasFlatbed   = capsUnknown || (caps & CAP_FLATBED) != 0,
-                HasFeeder    = capsUnknown || (caps & CAP_FEEDER)  != 0,
-                HasDuplex    = (caps & CAP_DUPLEX) != 0,
+                HasFlatbed   = true,
+                HasFeeder    = true,
+                HasDuplex    = false,  // conservative default; not knowable without Connect
             };
         }
         finally
         {
-            ReleaseCom(devProps);
-            ReleaseCom(itemProps);
-            ReleaseCom(firstItem);
-            ReleaseCom(deviceItems);
-            ReleaseCom(device);
             ReleaseCom(infoProps);
         }
     }

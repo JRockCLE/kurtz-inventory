@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>LdtScanAgent</RootNamespace>
     <AssemblyName>LdtScanAgent</AssemblyName>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <!-- Suppress warnings for platform-specific WIA / WinForms code -->
     <NoWarn>CA1416</NoWarn>
     <PublishSingleFile>true</PublishSingleFile>
