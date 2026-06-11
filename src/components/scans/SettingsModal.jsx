@@ -94,17 +94,35 @@ function EmailSendersSection() {
       return;
     }
     setConnecting(true);
+    const before = senders.length;
     try {
       const result = await connectGoogleAccount();
-      if (result.ok) {
-        await load();  // refresh list to show the new sender
-      } else {
+      // Always refresh, no matter how the popup closed — the truth is in the DB.
+      const fresh = await loadAndReturn();
+      if (!result.ok && !result.viaCloseDetect) {
         alert(`Connection failed: ${result.error || "unknown error"}`);
+      } else if (result.viaCloseDetect && fresh.length === before) {
+        // Popup closed but no new sender appeared — either user cancelled or
+        // there was a server-side failure we couldn't see. Soft message only.
+        alert("The sign-in popup closed without completing. If you cancelled, no action needed. If you authorized but the sender doesn't appear, try again.");
       }
     } catch (e) {
       alert(`Couldn't start Google sign-in: ${e.message}`);
     }
     setConnecting(false);
+  };
+
+  // Same as `load`, but returns the new list to the caller so we can compare counts
+  const loadAndReturn = async () => {
+    try {
+      const res = await fetch(
+        `${SB_URL}/rest/v1/email_senders?select=id,email_address,display_name,is_default,status,last_used_at,created_at&order=created_at.asc`,
+        { headers: restH() }
+      );
+      const list = res.ok ? await res.json() : [];
+      setSenders(list);
+      return list;
+    } catch { return senders; }
   };
 
   const setDefault = async (id) => {

@@ -47,25 +47,41 @@ export function connectGoogleAccount() {
       return;
     }
 
-    // Listen for the success/failure message from the Edge Function callback
+    // Two paths for getting the result back to us:
+    //
+    // 1) postMessage from the callback page (clean — gives us email directly)
+    // 2) Popup-closed detection (fallback — most modern browsers sever
+    //    window.opener after multiple cross-origin redirects, so the callback's
+    //    postMessage silently fails. When that happens, the OAuth flow still
+    //    succeeded server-side — we just have to ask the caller to refresh.
+    //
+    // Either way we resolve with `{ ok, email?, viaCloseDetect? }`; the caller
+    // refreshes the senders list regardless and the user sees the truth there.
+
+    const cleanup = () => {
+      window.removeEventListener("message", onMessage);
+      clearInterval(closedPoll);
+    };
+
     const onMessage = (event) => {
       if (typeof event.data !== "string") return;
       let result;
       try { result = JSON.parse(event.data); } catch { return; }
       if (typeof result.ok !== "boolean") return;
-      window.removeEventListener("message", onMessage);
-      clearInterval(closedPoll);
+      cleanup();
+      try { popup.close(); } catch { /* may be cross-origin */ }
       resolve(result);
     };
     window.addEventListener("message", onMessage);
 
-    // Fallback: detect if the user closed the popup before completing
     const closedPoll = setInterval(() => {
-      if (popup.closed) {
-        clearInterval(closedPoll);
-        window.removeEventListener("message", onMessage);
-        // small grace period in case message is still in flight
-        setTimeout(() => resolve({ ok: false, error: "Popup closed before completing." }), 200);
+      let closed = false;
+      try { closed = popup.closed; } catch { closed = true; /* COOP can make this throw */ }
+      if (closed) {
+        cleanup();
+        // We don't know if it worked. Resolve optimistically — the caller will
+        // refresh the senders list and the user sees the actual result there.
+        setTimeout(() => resolve({ ok: true, viaCloseDetect: true }), 200);
       }
     }, 500);
   });
