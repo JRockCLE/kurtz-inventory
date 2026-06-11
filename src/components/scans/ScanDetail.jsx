@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { scansApi } from "../../lib/scansApi";
 import PageThumbnail from "./PageThumbnail";
+import PageLightbox from "./PageLightbox";
+import ComposeEmailModal from "./ComposeEmailModal";
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({
@@ -8,16 +10,62 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// Load a page's image + bake its vector strokes + rotation onto a canvas
+// at the original image's resolution. Used by Save PDF (and could be used by
+// a future "download flattened image" path too).
+async function composePageForExport(page, imageUrl) {
+  const img = await new Promise((resolve, reject) => {
+    const el = new Image();
+    el.crossOrigin = "anonymous";
+    el.onload  = () => resolve(el);
+    el.onerror = () => reject(new Error(`Couldn't load page ${page.page_number}`));
+    el.src = imageUrl;
+  });
+
+  const rot = ((page.rotation || 0) % 360 + 360) % 360;
+  const swap = rot === 90 || rot === 270;
+  const w = swap ? img.height : img.width;
+  const h = swap ? img.width  : img.height;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+  ctx.translate(w / 2, h / 2);
+  ctx.rotate((rot * Math.PI) / 180);
+  ctx.drawImage(img, -img.width / 2, -img.height / 2);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);  // reset
+
+  const strokes = page.annotations?.strokes;
+  if (strokes && strokes.length) {
+    for (const s of strokes) {
+      if (!s.points || s.points.length < 2) continue;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth   = s.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(s.points[0].x, s.points[0].y);
+      for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+      ctx.stroke();
+    }
+  }
+
+  return canvas;
+}
+
 /**
  * Detail view of a single scan.
  *
  * Props:
  *   scanId:    string
- *   onBack:    () => void     — "Save Scan": returns to scan list (data is auto-saved)
+ *   mode:      'fresh' (right after a New Scan) | 'view' (clicked from the list)
+ *   onBack:    () => void     — returns to scan list (data is auto-saved)
  *   onDeleted: () => void     — called after the scan is hard-deleted
- *   onRescan:  () => void     — discard this scan and start a new one
  */
-export default function ScanDetail({ scanId, onBack, onDeleted, onRescan }) {
+export default function ScanDetail({ scanId, mode = "view", onBack, onDeleted }) {
   const [scan, setScan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -29,6 +77,9 @@ export default function ScanDetail({ scanId, onBack, onDeleted, onRescan }) {
 
   // Selected page (for actions)
   const [selectedPageId, setSelectedPageId] = useState(null);
+
+  // Email compose modal
+  const [showCompose, setShowCompose] = useState(false);
 
   // Drag-to-reorder state
   const [draggingIdx, setDraggingIdx] = useState(null);
@@ -65,34 +116,6 @@ export default function ScanDetail({ scanId, onBack, onDeleted, onRescan }) {
     }
   };
 
-  const rotatePage = async (page, direction = 1) => {
-    setBusy(true);
-    try {
-      const newRot = ((page.rotation || 0) + direction * 90 + 360) % 360;
-      await scansApi.updatePage(page.id, { rotation: newRot });
-      setScan(s => ({
-        ...s,
-        pages: s.pages.map(p => p.id === page.id ? { ...p, rotation: newRot } : p),
-      }));
-    } catch (e) {
-      alert(`Rotate failed: ${e.message}`);
-    }
-    setBusy(false);
-  };
-
-  const deletePage = async (page) => {
-    if (!confirm(`Delete page ${page.page_number}? This cannot be undone.`)) return;
-    setBusy(true);
-    try {
-      await scansApi.deletePage(scanId, page.id, page.storage_path);
-      await load();  // refetch — page numbers may have shifted
-      setSelectedPageId(null);
-    } catch (e) {
-      alert(`Delete failed: ${e.message}`);
-    }
-    setBusy(false);
-  };
-
   const reorderTo = async (fromIdx, toIdx) => {
     if (fromIdx == null || toIdx == null || fromIdx === toIdx) return;
     if (fromIdx < 0 || fromIdx >= scan.pages.length) return;
@@ -113,39 +136,92 @@ export default function ScanDetail({ scanId, onBack, onDeleted, onRescan }) {
     setBusy(false);
   };
 
-  const movePage = (page, direction) => {
-    const idx = scan.pages.findIndex(p => p.id === page.id);
-    return reorderTo(idx, idx + direction);
-  };
-
   const discardScan = async () => {
-    if (!confirm(`Discard this scan and all ${scan.page_count} page${scan.page_count === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    const verb = mode === "fresh" ? "Discard" : "Delete";
+    if (!confirm(`${verb} this scan and all ${scan.page_count} page${scan.page_count === 1 ? "" : "s"}? This cannot be undone.`)) return;
     setBusy(true);
     try {
       await scansApi.hardDelete(scanId);
       onDeleted();
     } catch (e) {
-      alert(`Discard failed: ${e.message}`);
+      alert(`${verb} failed: ${e.message}`);
       setBusy(false);
     }
   };
 
-  const rescanScan = async () => {
-    if (!confirm(`Discard this scan and start a new one? The ${scan.page_count} captured page${scan.page_count === 1 ? "" : "s"} will be deleted.`)) return;
+  const savePdf = async () => {
     setBusy(true);
     try {
-      await scansApi.hardDelete(scanId);
-      onRescan?.();
+      const { jsPDF } = await import("jspdf");
+
+      // Tiny margin so an 8.5×11 scan lands at (basically) full size — letter
+      // PDF page is 612×792pt = 8.5×11", so a near-zero margin lets the image
+      // fill the page true-to-life. A few points of margin keeps stray
+      // edge artifacts off the page boundary.
+      const MARGIN = 6;
+
+      let pdf;
+      for (let i = 0; i < scan.pages.length; i++) {
+        const p = scan.pages[i];
+        const url = await scansApi.signedUrl(scansApi.visiblePath(p), 3600);
+        const composite = await composePageForExport(p, url);
+        const dataUrl = composite.toDataURL("image/jpeg", 0.92);
+
+        // Pick portrait vs landscape per page based on the image's aspect ratio
+        const orientation = composite.width > composite.height ? "landscape" : "portrait";
+
+        if (i === 0) {
+          pdf = new jsPDF({ unit: "pt", format: "letter", orientation });
+        } else {
+          pdf.addPage("letter", orientation);
+        }
+
+        const pageW = pdf.internal.pageSize.getWidth();
+        const pageH = pdf.internal.pageSize.getHeight();
+        const maxW = pageW - MARGIN * 2;
+        const maxH = pageH - MARGIN * 2;
+        const aspect = composite.width / composite.height;
+        let drawW = maxW, drawH = maxW / aspect;
+        if (drawH > maxH) { drawH = maxH; drawW = maxH * aspect; }
+        const offX = (pageW - drawW) / 2;
+        const offY = (pageH - drawH) / 2;
+
+        pdf.addImage(dataUrl, "JPEG", offX, offY, drawW, drawH, undefined, "FAST");
+      }
+
+      const filename = `${(scan.title || "scan").replace(/[\/\\?%*:|"<>]/g, "_")}.pdf`;
+      pdf.save(filename);
     } catch (e) {
-      alert(`Rescan failed: ${e.message}`);
-      setBusy(false);
+      alert(`PDF export failed: ${e.message}`);
     }
+    setBusy(false);
   };
 
   const printScan = async () => {
     setBusy(true);
     try {
-      const urls = await Promise.all(scan.pages.map(p => scansApi.signedUrl(p.storage_path, 3600)));
+      const urls = await Promise.all(scan.pages.map(p => scansApi.signedUrl(scansApi.visiblePath(p), 3600)));
+
+      const pageHtml = scan.pages.map((p, i) => {
+        const rot = p.rotation || 0;
+        const strokes = p.annotations?.strokes;
+        const overlay = (strokes && strokes.length > 0 && p.width_px && p.height_px) ? `
+          <svg viewBox="0 0 ${p.width_px} ${p.height_px}"
+               preserveAspectRatio="none"
+               style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none">
+            ${strokes.map(s => `<polyline
+              points="${s.points.map(pt => `${pt.x},${pt.y}`).join(" ")}"
+              fill="none" stroke="${s.color}" stroke-width="${s.width}"
+              stroke-linecap="round" stroke-linejoin="round" />`).join("")}
+          </svg>` : "";
+        return `<div class="page">
+          <div class="frame" style="transform:rotate(${rot}deg)">
+            <img src="${urls[i]}" alt="Page ${p.page_number}">
+            ${overlay}
+          </div>
+        </div>`;
+      }).join("");
+
       const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(scan.title)}</title>
 <style>
@@ -153,9 +229,10 @@ export default function ScanDetail({ scanId, onBack, onDeleted, onRescan }) {
   html, body { margin: 0; padding: 0; background: white; font-family: -apple-system, system-ui, sans-serif; }
   .page { page-break-after: always; display: flex; align-items: center; justify-content: center; min-height: 95vh; }
   .page:last-child { page-break-after: auto; }
-  .page img { max-width: 100%; max-height: 100vh; object-fit: contain; }
+  .frame { position: relative; max-width: 100%; max-height: 100vh; display: inline-block; }
+  .frame img { display: block; max-width: 100%; max-height: 100vh; object-fit: contain; }
 </style></head><body>
-${scan.pages.map((p, i) => `<div class="page"><img src="${urls[i]}" style="transform:rotate(${p.rotation || 0}deg)" alt="Page ${p.page_number}"></div>`).join("")}
+${pageHtml}
 </body></html>`;
 
       const w = window.open("", "_blank");
@@ -205,14 +282,24 @@ ${scan.pages.map((p, i) => `<div class="page"><img src="${urls[i]}" style="trans
     <div className="h-full flex flex-col bg-stone-50">
       {/* Header */}
       <div className="bg-white border-b border-stone-200 px-4 py-3 flex items-center gap-3 flex-wrap">
-        <button
-          onClick={onBack}
-          disabled={busy}
-          className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 transition-colors disabled:opacity-50"
-          title="Return to scan list. Your edits are already saved."
-        >
-          ✓ Save Scan
-        </button>
+        {mode === "fresh" ? (
+          <button
+            onClick={onBack}
+            disabled={busy}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 transition-colors disabled:opacity-50"
+            title="Return to scan list. Your edits are already saved."
+          >
+            Save Scan
+          </button>
+        ) : (
+          <button
+            onClick={onBack}
+            disabled={busy}
+            className="px-4 py-2 border border-stone-300 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-50 transition-colors disabled:opacity-50"
+          >
+            ← Back
+          </button>
+        )}
 
         <div className="flex-1 min-w-0">
           {editingTitle ? (
@@ -235,7 +322,6 @@ ${scan.pages.map((p, i) => `<div class="page"><img src="${urls[i]}" style="trans
               title="Click to rename"
             >
               {scan.title}
-              <span className="ml-2 text-[10px] text-stone-300 font-normal">✎ rename</span>
             </button>
           )}
           <div className="text-xs text-stone-400">
@@ -247,37 +333,36 @@ ${scan.pages.map((p, i) => `<div class="page"><img src="${urls[i]}" style="trans
         </div>
 
         <div className="flex items-center gap-2">
-          {onRescan && (
-            <button
-              onClick={rescanScan}
-              disabled={busy}
-              className="px-3 py-1.5 text-sm border border-stone-300 text-stone-700 rounded-lg hover:bg-stone-50 transition-colors disabled:opacity-50"
-              title="Discard and scan again"
-            >
-              ↻ Rescan
-            </button>
-          )}
           <button
             onClick={printScan}
             disabled={busy}
             className="px-3 py-1.5 text-sm border border-stone-300 text-stone-700 rounded-lg hover:bg-stone-50 transition-colors disabled:opacity-50"
             title="Print this scan"
           >
-            🖨 Print
+            Print
           </button>
           <button
-            disabled
-            title="Email — coming soon"
-            className="px-3 py-1.5 text-sm bg-stone-100 text-stone-400 rounded-lg cursor-not-allowed"
+            onClick={savePdf}
+            disabled={busy}
+            className="px-3 py-1.5 text-sm border border-stone-300 text-stone-700 rounded-lg hover:bg-stone-50 transition-colors disabled:opacity-50"
+            title="Download as a single PDF file"
           >
-            ✉ Email
+            Save PDF
+          </button>
+          <button
+            onClick={() => setShowCompose(true)}
+            disabled={busy}
+            className="px-3 py-1.5 text-sm border border-stone-300 text-stone-700 rounded-lg hover:bg-stone-50 transition-colors disabled:opacity-50"
+            title="Email this scan"
+          >
+            Email
           </button>
           <button
             onClick={discardScan}
             disabled={busy}
             className="px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
           >
-            🗑 Discard
+            {mode === "fresh" ? "Discard" : "Delete"}
           </button>
         </div>
       </div>
@@ -339,77 +424,29 @@ ${scan.pages.map((p, i) => `<div class="page"><img src="${urls[i]}" style="trans
           )}
         </div>
 
-        {/* Side panel for selected page actions */}
-        {selectedPage && (
-          <div className="w-72 bg-white border-l border-stone-200 flex flex-col">
-            <div className="px-4 py-3 border-b border-stone-200 flex items-center justify-between">
-              <div className="font-bold text-sm text-stone-800">Page {selectedPage.page_number}</div>
-              <button
-                onClick={() => setSelectedPageId(null)}
-                className="text-stone-400 hover:text-stone-700 text-lg leading-none"
-              >
-                ×
-              </button>
-            </div>
-            <div className="p-4 flex-1 overflow-auto space-y-3">
-              <PageThumbnail page={selectedPage} size="lg" />
-
-              <div className="text-xs text-stone-400">
-                {selectedPage.width_px} × {selectedPage.height_px} px ·{" "}
-                {(selectedPage.size_bytes / 1024).toFixed(1)} KB
-              </div>
-
-              <div className="space-y-2 pt-2">
-                <div className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Rotate</div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => rotatePage(selectedPage, -1)}
-                    disabled={busy}
-                    className="flex-1 px-3 py-2 border border-stone-300 rounded-lg text-sm hover:bg-stone-50 transition-colors disabled:opacity-50"
-                  >
-                    ↺ Left
-                  </button>
-                  <button
-                    onClick={() => rotatePage(selectedPage, 1)}
-                    disabled={busy}
-                    className="flex-1 px-3 py-2 border border-stone-300 rounded-lg text-sm hover:bg-stone-50 transition-colors disabled:opacity-50"
-                  >
-                    ↻ Right
-                  </button>
-                </div>
-
-                <div className="text-[10px] font-bold text-stone-400 uppercase tracking-wider pt-2">Reorder</div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => movePage(selectedPage, -1)}
-                    disabled={busy || selectedPage.page_number === 1}
-                    className="flex-1 px-3 py-2 border border-stone-300 rounded-lg text-sm hover:bg-stone-50 transition-colors disabled:opacity-30"
-                  >
-                    ← Move Earlier
-                  </button>
-                  <button
-                    onClick={() => movePage(selectedPage, 1)}
-                    disabled={busy || selectedPage.page_number === scan.page_count}
-                    className="flex-1 px-3 py-2 border border-stone-300 rounded-lg text-sm hover:bg-stone-50 transition-colors disabled:opacity-30"
-                  >
-                    Move Later →
-                  </button>
-                </div>
-
-                <div className="pt-4">
-                  <button
-                    onClick={() => deletePage(selectedPage)}
-                    disabled={busy}
-                    className="w-full px-3 py-2 border border-red-200 text-red-600 rounded-lg text-sm font-bold hover:bg-red-50 transition-colors disabled:opacity-50"
-                  >
-                    🗑 Delete Page
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Full-screen lightbox — opens when a thumbnail is clicked */}
+      {selectedPage && (
+        <PageLightbox
+          pages={scan.pages}
+          pageId={selectedPage.id}
+          busy={busy}
+          onClose={() => setSelectedPageId(null)}
+          onChangePage={(newId) => setSelectedPageId(newId)}
+          onPageUpdated={(updated) => {
+            setScan(s => ({ ...s, pages: s.pages.map(p => p.id === updated.id ? { ...p, ...updated } : p) }));
+          }}
+          onPageDeleted={(deletedId) => {
+            setSelectedPageId(null);
+            load();  // refetch so page_number renumbering shows
+          }}
+        />
+      )}
+
+      {showCompose && (
+        <ComposeEmailModal scan={scan} onClose={() => setShowCompose(false)} />
+      )}
     </div>
   );
 }

@@ -29,6 +29,7 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
   const loadScanners = async () => {
     setLoading(true);
     setErr(null);
+    setScanners([]);  // clear any stale entries (e.g. after toggling mock off)
     const ping = await scanAgent.ping();
     setAgentStatus(ping);
     if (!ping.ok) {
@@ -42,7 +43,6 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
       return;
     }
     setScanners(r.scanners);
-    // Pre-select first scanner if none chosen
     if (!scannerId && r.scanners.length > 0) {
       setScannerId(r.scanners[0].id);
     }
@@ -127,9 +127,22 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
           )}
 
           {agentStatus?.ok && (
-            <div className="text-xs text-stone-400">
-              Agent: <span className="text-green-600 font-bold">connected</span> · {agentStatus.hostname}
-              {mockEnabled && <span className="ml-2 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold">MOCK</span>}
+            <div className="text-xs text-stone-400 flex items-center gap-2 flex-wrap">
+              <span>
+                Agent: <span className="text-green-600 font-bold">connected</span> · {agentStatus.hostname}
+              </span>
+              {mockEnabled && (
+                <>
+                  <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold">MOCK</span>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleMock(false)}
+                    className="text-purple-700 underline hover:text-purple-900 font-medium"
+                  >
+                    Turn off mock mode
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -159,7 +172,7 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
             <label className={labelCls}>Default source</label>
             <div className="flex border border-stone-300 rounded-lg overflow-hidden">
               <button onClick={() => setSource("Flatbed")} className={segBtn(source === "Flatbed")}>
-                📄 Flatbed
+                Flatbed
               </button>
               <button
                 onClick={() => setSource("ADF")}
@@ -167,7 +180,7 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
                 disabled={selectedScanner && !selectedScanner.hasFeeder}
                 title={selectedScanner && !selectedScanner.hasFeeder ? "This scanner has no document feeder" : ""}
               >
-                📑 Document Feeder (ADF)
+                Document Feeder (ADF)
               </button>
             </div>
             {source === "ADF" && (
@@ -203,7 +216,6 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
               type="text"
               value={userName}
               onChange={e => setUserNameLocal(e.target.value)}
-              placeholder="e.g. Sharon"
               className={fieldCls}
             />
             <p className="text-xs text-stone-400 mt-1.5">
@@ -233,7 +245,7 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
                   : "bg-amber-600 text-white hover:bg-amber-700"
               }`}
             >
-              {saving ? "Saving..." : mode === "scan" ? "Save & Start Scanning" : initialConfig?.configured ? "Save Changes" : "Save & Start Scanning"}
+              {saving ? "Saving..." : mode === "scan" ? "Start Scanning" : initialConfig?.configured ? "Save Changes" : "Start Scanning"}
             </button>
           </div>
         </div>

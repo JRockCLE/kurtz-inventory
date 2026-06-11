@@ -186,7 +186,10 @@ export const scansApi = {
       headers: restH(),
       body: JSON.stringify(patch),
     });
-    if (!res.ok) throw new Error(`page update failed: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`page update failed: ${res.status} ${body}`);
+    }
   },
 
   /** Delete a page (and its file). Renumbers remaining pages. */
@@ -223,6 +226,76 @@ export const scansApi = {
     for (let i = 0; i < orderedIds.length; i++) {
       await this.updatePage(orderedIds[i], { page_number: i + 1 });
     }
+  },
+
+  // ─── Editing (annotate / crop / straighten) ───────────────────────
+  //
+  // Original-preserving model:
+  //   - storage_path        — the original scan (never modified)
+  //   - edited_storage_path — flattened result after edits (optional)
+  //   - viewers prefer edited_storage_path when present, fall back to original
+  //
+  // Saving an edit uploads a new file at scans/{scanId}/page-NNN-edited.jpg
+  // and patches the row's edited_storage_path. Resetting clears the column
+  // and deletes the file. The original is always recoverable.
+
+  /** Path used for the edited copy. Sibling of the original. */
+  editedPath(scanId, pageNum) {
+    return `${scanId}/page-${pad3(pageNum)}-edited.jpg`;
+  },
+
+  /**
+   * Save an edited page.
+   *
+   * The image (rotation/crop/straighten baked, BUT WITHOUT strokes) is uploaded
+   * to storage; the strokes are stored as vector data in `annotations.strokes`.
+   * On re-edit they are loaded back onto the canvas overlay so the user can
+   * delete/modify them individually.
+   *
+   * Pass `strokes = null` to leave annotations untouched (e.g. when only the
+   * crop/rotate changed and you don't want to wipe existing strokes).
+   * Pass `strokes = []` to clear annotations.
+   */
+  async saveEditedPage(page, blob, strokes /* undefined | null | array */, dims /* {width, height} */) {
+    const scanId  = page.scan_id;
+    const pageNum = page.page_number;
+    const path    = `${scanId}/page-${pad3(pageNum)}-edited.jpg`;
+
+    if (blob) {
+      const upRes = await fetch(`${SB_URL}/storage/v1/object/scans/${path}`, {
+        method: "POST",
+        headers: { ...storageH("image/jpeg"), "x-upsert": "true" },
+        body: blob,
+      });
+      if (!upRes.ok) {
+        throw new Error(`edit upload failed: ${upRes.status} ${await upRes.text()}`);
+      }
+    }
+
+    const patch = { edited_storage_path: path, rotation: 0 };
+    if (strokes !== undefined && strokes !== null) {
+      patch.annotations = strokes.length > 0 ? { strokes } : null;
+    }
+    if (dims?.width)  patch.width_px  = dims.width;
+    if (dims?.height) patch.height_px = dims.height;
+    await this.updatePage(page.id, patch);
+    return path;
+  },
+
+  /** Remove the edited version + annotations, fall back to original. */
+  async resetPageEdits(page) {
+    if (page.edited_storage_path) {
+      await fetch(`${SB_URL}/storage/v1/object/scans/${page.edited_storage_path}`, {
+        method: "DELETE",
+        headers: restH(),
+      });
+    }
+    await this.updatePage(page.id, { edited_storage_path: null, annotations: null });
+  },
+
+  /** Returns the path that should currently be displayed (edited if set, original otherwise). */
+  visiblePath(page) {
+    return page?.edited_storage_path || page?.storage_path || "";
   },
 
   /** Get a temporary signed URL for a stored page */

@@ -1,0 +1,9 @@
+project_id = "veqsqzzymxjniagodkey"
+
+# OAuth callback is hit by Google (no JWT in the request) — skip auth check.
+[functions.google-oauth-callback]
+verify_jwt = false
+
+# send-email requires the app's anon JWT in Authorization header (default).
+[functions.send-email]
+verify_jwt = true

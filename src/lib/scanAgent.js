@@ -10,9 +10,15 @@
 
 const AGENT_BASE = "http://localhost:7878";
 const TIMEOUT_MS = 10_000;          // most calls
+const ENUM_TIMEOUT_MS = 30_000;     // WIA enumeration can be slow, esp. with network-discovered scanners
 const SCAN_TIMEOUT_MS = 120_000;    // a real ADF run can take a while
 
 const MOCK_KEY = "ldt_scan_use_mock";
+
+// Module-level in-flight dedup. Coalesces concurrent listScanners callers
+// (React StrictMode double-mount in dev, multiple tabs, etc.) into one
+// request to the agent so we don't trip its scanner_busy gate against ourselves.
+let _scannersInflight = null;
 
 export const isMockMode = () => {
   if (typeof window === "undefined") return false;
@@ -64,7 +70,21 @@ export const scanAgent = {
     return { ok: true, version: r.data?.version, hostname: r.data?.hostname };
   },
 
-  /** List scanners attached to this PC */
+  /**
+   * List scanners attached to this PC.
+   *
+   * Two robustness layers added to handle real-world races:
+   *
+   *   1. Concurrent-call dedup. React 18+ in dev StrictMode double-mounts and
+   *      double-invokes effects, so a single navigation to the setup screen
+   *      fires `listScanners` twice in quick succession. The agent's WIA
+   *      semaphore can only serve one of them — the loser gets `scanner_busy`.
+   *      We coalesce concurrent calls into one in-flight promise.
+   *
+   *   2. Auto-retry on `scanner_busy`. If a real other caller is mid-enumeration
+   *      (another tab, the agent's own background warmup, etc.), wait a moment
+   *      and try again before bubbling the error to the UI.
+   */
   async listScanners() {
     if (isMockMode()) {
       return {
@@ -81,9 +101,17 @@ export const scanAgent = {
         ],
       };
     }
-    const r = await call("/scanners");
-    if (!r.ok) return { ok: false, error: r.error };
-    return { ok: true, scanners: r.data?.scanners ?? [] };
+    if (_scannersInflight) return _scannersInflight;
+    _scannersInflight = (async () => {
+      let r = await call("/scanners", { timeout: ENUM_TIMEOUT_MS });
+      if (!r.ok && r.error === "scanner_busy") {
+        await new Promise(res => setTimeout(res, 1200));
+        r = await call("/scanners", { timeout: ENUM_TIMEOUT_MS });
+      }
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, scanners: r.data?.scanners ?? [] };
+    })().finally(() => { _scannersInflight = null; });
+    return _scannersInflight;
   },
 
   /** Get current agent config (default scanner, source, dpi, etc.) */

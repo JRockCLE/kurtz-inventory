@@ -12,25 +12,27 @@ import PageThumbnail from "./PageThumbnail";
 export default function ScanHub() {
   const [view, setView] = useState("list");        // 'list' | 'new' | 'detail'
   const [selectedId, setSelectedId] = useState(null);
+  const [detailMode, setDetailMode] = useState("view");  // 'fresh' (just scanned) | 'view' (clicked from list)
 
   const goToList = () => { setView("list"); setSelectedId(null); };
   const goToNew = () => setView("new");
-  const goToDetail = (id) => { setSelectedId(id); setView("detail"); };
+  const openJustScanned = (id) => { setSelectedId(id); setDetailMode("fresh"); setView("detail"); };
+  const openFromList    = (id) => { setSelectedId(id); setDetailMode("view");  setView("detail"); };
 
   if (view === "new") {
-    return <NewScanFlow onComplete={(id) => goToDetail(id)} onCancel={goToList} />;
+    return <NewScanFlow onComplete={openJustScanned} onCancel={goToList} />;
   }
   if (view === "detail" && selectedId) {
     return (
       <ScanDetail
         scanId={selectedId}
+        mode={detailMode}
         onBack={goToList}
         onDeleted={goToList}
-        onRescan={() => { setSelectedId(null); setView("new"); }}
       />
     );
   }
-  return <ScanList onSelect={goToDetail} onNew={goToNew} />;
+  return <ScanList onSelect={openFromList} onNew={goToNew} />;
 }
 
 // ─── List subview ───────────────────────────────────────────────────
@@ -80,7 +82,7 @@ function ScanList({ onSelect, onNew }) {
             )}
           </h2>
           <p className="text-xs text-stone-400">
-            {scans.length} scan{scans.length === 1 ? "" : "s"} · all paperwork in one place
+            {scans.length} scan{scans.length === 1 ? "" : "s"}
           </p>
         </div>
         <button
@@ -193,10 +195,10 @@ function ScanCard({ scan, onClick, onDelete }) {
       <button
         onClick={(e) => { e.stopPropagation(); onDelete?.(); }}
         title="Delete scan"
-        className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center text-stone-400 hover:text-white hover:bg-red-500 transition-all
+        className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center text-stone-400 hover:text-red-500 transition-colors
                    opacity-30 group-hover:opacity-100 focus:opacity-100 focus:outline-none"
       >
-        <span className="text-base leading-none">🗑</span>
+        <span className="text-xl leading-none">×</span>
       </button>
 
       <div className="flex gap-3">
@@ -232,13 +234,13 @@ function ScanCard({ scan, onClick, onDelete }) {
               className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-stone-100 text-stone-400 rounded cursor-not-allowed"
               title="Email — coming soon"
             >
-              ✉ Email
+              Email
             </span>
             <span
               className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-stone-100 text-stone-400 rounded cursor-not-allowed"
               title="PDF download — coming soon"
             >
-              📑 PDF
+              PDF
             </span>
           </div>
         </div>
