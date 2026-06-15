@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 import { useLocalItems, qry, fetchItemsForNeeds } from "../lib/hooks";
 import { fmt$, fmtDate, compareLocation, prefixColorClass } from "../lib/helpers";
 
@@ -111,9 +111,27 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
             return collator.compare(a.store_location, b.store_location) || (a.name || "").localeCompare(b.name || "");
           });
           break;
+        case "wholesale": {
+          // Three-tier grouping: product_type (Dry → Cooler → Freezer) →
+          // Department → then sorted within each dept by Mfg then Description.
+          const typeOrder = { dry: 1, cooler: 2, freezer: 3 };
+          allItems.sort((a, b) => {
+            const ta = typeOrder[a.product_type] ?? 99;
+            const tb = typeOrder[b.product_type] ?? 99;
+            if (ta !== tb) return ta - tb;
+            const da = (a.dept_id ? deptMap[a.dept_id] : null) || "zzz";
+            const db = (b.dept_id ? deptMap[b.dept_id] : null) || "zzz";
+            if (da !== db) return da.localeCompare(db);
+            const ma = (a._mfg_name || "zzz").toLowerCase();
+            const mb = (b._mfg_name || "zzz").toLowerCase();
+            if (ma !== mb) return ma.localeCompare(mb);
+            return (a.name || "").localeCompare(b.name || "");
+          });
+          break;
+        }
       }
 
-      const labels = { dept: "Department", mfg: "Manufacturer", wh_loc: "Warehouse Location", store_loc: "Store Location" };
+      const labels = { dept: "Department", mfg: "Manufacturer", wh_loc: "Warehouse Location", store_loc: "Store Location", wholesale: "Wholesale List" };
       setPrintItems({ items: allItems, sortOption, sortLabel: labels[sortOption] });
       setTimeout(() => { window.print(); }, 300);
     } catch (err) { alert("Error loading items: " + err.message); }
@@ -176,6 +194,11 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
                       {opt.label}
                     </button>
                   ))}
+                  <div className="border-t border-stone-100 my-1" />
+                  <button onClick={() => preparePrint("wholesale")}
+                    className="w-full text-left px-3 py-2 text-sm text-stone-700 hover:bg-amber-50 hover:text-amber-800">
+                    Wholesale List
+                  </button>
                 </div>
                 </>
               )}
@@ -313,8 +336,9 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
       )}
 
       {/* ─── Print-only item list ─── */}
-      {printItems && (
+      {printItems && printItems.sortOption !== "wholesale" && (
         <div className="hidden print:block">
+          <style>{`@page { margin: 0.2in; }`}</style>
           <div className="px-6 pt-6 pb-2">
             <div className="flex justify-between items-end border-b-2 border-stone-800 pb-2 mb-1">
               <div>
@@ -386,6 +410,100 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
               })()}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ─── Wholesale List (Dry/Cooler/Freezer → Dept → Mfg+Name) ─── */}
+      {printItems && printItems.sortOption === "wholesale" && (
+        <div className="hidden print:block">
+          <style>{`@page { margin: 0.2in; }`}</style>
+          <div className="px-6 pt-6 pb-2">
+            <div className="flex justify-between items-end border-b-2 border-stone-800 pb-2 mb-1">
+              <div>
+                <h1 className="text-xl font-black">KURTZ DISCOUNT GROCERIES</h1>
+                <p className="text-sm font-bold">WHOLESALE LIST</p>
+              </div>
+              <div className="text-right text-sm">
+                <p className="font-bold">{new Date().toLocaleDateString()}</p>
+                <p className="text-xs text-stone-500">{printItems.items.length} items</p>
+              </div>
+            </div>
+          </div>
+
+          {(() => {
+            // Bucket items into product_type → dept → [items]. Order is preserved
+            // from the sort above (Dry → Cooler → Freezer, dept alpha, mfg+name).
+            const buckets = {};
+            for (const item of printItems.items) {
+              const pt   = item.product_type || "other";
+              const dept = (item.dept_id ? deptMap[item.dept_id] : null) || "Other";
+              if (!buckets[pt]) buckets[pt] = {};
+              if (!buckets[pt][dept]) buckets[pt][dept] = [];
+              buckets[pt][dept].push(item);
+            }
+            const typeOrder  = ["dry", "cooler", "freezer", "other"];
+            const typeLabels = { dry: "DRY", cooler: "COOLER", freezer: "FREEZER", other: "OTHER" };
+
+            return typeOrder.filter(pt => buckets[pt]).map((pt, ptIdx) => (
+              <div key={pt} className="mb-4" style={ptIdx > 0 ? { pageBreakBefore: "always" } : undefined}>
+                <div
+                  className="bg-stone-800 text-white px-4 py-1.5 text-sm font-black uppercase tracking-wider"
+                  style={{
+                    WebkitPrintColorAdjust: "exact",
+                    printColorAdjust: "exact",
+                    pageBreakAfter: "avoid",
+                  }}
+                >
+                  {typeLabels[pt]}
+                </div>
+                <table className="w-full text-xs border-collapse">
+                  <thead style={{ display: "table-header-group" }}>
+                    <tr className="border-b-2 border-stone-400 text-[10px] font-bold text-stone-600 uppercase">
+                      <th className="px-2 py-1.5 text-left">Mfg</th>
+                      <th className="px-2 py-1.5 text-left">Description</th>
+                      <th className="px-2 py-1.5 text-center whitespace-nowrap">U/Case</th>
+                      <th className="px-2 py-1.5 text-center whitespace-nowrap">Size</th>
+                      <th className="px-2 py-1.5 text-center whitespace-nowrap">Exp</th>
+                      <th className="px-2 py-1.5 text-left whitespace-nowrap">WH Loc</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.keys(buckets[pt]).sort().map(dept => (
+                      <Fragment key={dept}>
+                        <tr>
+                          <td
+                            colSpan={6}
+                            className="pt-2 pb-1 px-2 font-bold text-xs uppercase text-stone-800 border-b border-stone-300 bg-stone-100"
+                            style={{
+                              WebkitPrintColorAdjust: "exact",
+                              printColorAdjust: "exact",
+                              pageBreakAfter: "avoid",
+                            }}
+                          >
+                            {dept}
+                          </td>
+                        </tr>
+                        {buckets[pt][dept].map((item, ii) => {
+                          const sizeUnit = [item.size, item.ref_unit_cd ? unitMap[String(item.ref_unit_cd)] : null]
+                            .filter(Boolean).join(" ");
+                          return (
+                            <tr key={item.id} className={ii % 2 ? "bg-stone-50" : ""}>
+                              <td className="px-2 py-1 text-stone-500 border-b border-stone-100">{item._mfg_name || "—"}</td>
+                              <td className="px-2 py-1 font-medium text-stone-800 border-b border-stone-100">{item.name}</td>
+                              <td className="px-2 py-1 text-center text-stone-500 border-b border-stone-100">{item.case_size || "—"}</td>
+                              <td className="px-2 py-1 text-center text-stone-500 border-b border-stone-100 whitespace-nowrap">{sizeUnit || "—"}</td>
+                              <td className="px-2 py-1 text-center text-stone-500 border-b border-stone-100 whitespace-nowrap">{fmtDate(item.expiration_date)}</td>
+                              <td className="px-2 py-1 text-amber-700 font-medium border-b border-stone-100 whitespace-nowrap">{item.warehouse_location || "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ));
+          })()}
         </div>
       )}
     </div>
