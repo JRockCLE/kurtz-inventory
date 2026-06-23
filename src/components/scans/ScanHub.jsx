@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { scansApi } from "../../lib/scansApi";
+import { downloadScanPdf } from "../../lib/scanPdf";
 import { isMockMode } from "../../lib/scanAgent";
 import NewScanFlow from "./NewScanFlow";
 import ScanDetail from "./ScanDetail";
 import PageThumbnail from "./PageThumbnail";
+import ComposeEmailModal from "./ComposeEmailModal";
 
 /**
  * Top-level Scan Hub.
@@ -167,21 +169,47 @@ function ScanList({ onSelect, onNew }) {
 // ─── ScanCard ───────────────────────────────────────────────────────
 
 function ScanCard({ scan, onClick, onDelete }) {
-  const [firstPage, setFirstPage] = useState(null);
-  const [loadingPage, setLoadingPage] = useState(true);
+  const [fullScan, setFullScan] = useState(null);
+  const [loadingScan, setLoadingScan] = useState(true);
+  const [showCompose, setShowCompose] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     scansApi.get(scan.id).then(s => {
-      if (!cancelled && s?.pages?.[0]) setFirstPage(s.pages[0]);
-      if (!cancelled) setLoadingPage(false);
-    }).catch(() => { if (!cancelled) setLoadingPage(false); });
+      if (!cancelled) { setFullScan(s); setLoadingScan(false); }
+    }).catch(() => { if (!cancelled) setLoadingScan(false); });
     return () => { cancelled = true; };
   }, [scan.id]);
 
   const handleKey = (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
   };
+
+  const firstPage = fullScan?.pages?.[0];
+  const ready = !!fullScan && fullScan.pages?.length > 0;
+
+  const handleEmail = (e) => {
+    e.stopPropagation();
+    if (!ready) return;
+    setShowCompose(true);
+  };
+
+  const handlePdf = async (e) => {
+    e.stopPropagation();
+    if (!ready || pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      await downloadScanPdf(fullScan);
+    } catch (err) {
+      alert(`PDF export failed: ${err.message}`);
+    }
+    setPdfBusy(false);
+  };
+
+  const chipBase = "px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded transition-colors";
+  const chipActive = "bg-stone-100 text-stone-700 hover:bg-amber-100 hover:text-amber-800";
+  const chipDisabled = "bg-stone-100 text-stone-400 cursor-not-allowed";
 
   return (
     <div
@@ -204,7 +232,7 @@ function ScanCard({ scan, onClick, onDelete }) {
       <div className="flex gap-3">
         {/* Thumbnail */}
         <div className="flex-shrink-0">
-          {loadingPage ? (
+          {loadingScan ? (
             <div className="w-20 h-24 bg-stone-100 rounded-lg" />
           ) : firstPage ? (
             <PageThumbnail page={firstPage} size="sm" />
@@ -228,23 +256,34 @@ function ScanCard({ scan, onClick, onDelete }) {
           </div>
           <div className="text-xs text-stone-400 mt-1">{formatTime(scan.created_at)}</div>
 
-          {/* Action chips (placeholders for later) */}
           <div className="flex gap-1.5 mt-2">
-            <span
-              className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-stone-100 text-stone-400 rounded cursor-not-allowed"
-              title="Email — coming soon"
+            <button
+              type="button"
+              onClick={handleEmail}
+              disabled={!ready}
+              className={`${chipBase} ${ready ? chipActive : chipDisabled}`}
+              title={ready ? "Email this scan" : "Loading scan…"}
             >
               Email
-            </span>
-            <span
-              className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-stone-100 text-stone-400 rounded cursor-not-allowed"
-              title="PDF download — coming soon"
+            </button>
+            <button
+              type="button"
+              onClick={handlePdf}
+              disabled={!ready || pdfBusy}
+              className={`${chipBase} ${ready && !pdfBusy ? chipActive : chipDisabled}`}
+              title={ready ? "Download as PDF" : "Loading scan…"}
             >
-              PDF
-            </span>
+              {pdfBusy ? "PDF…" : "PDF"}
+            </button>
           </div>
         </div>
       </div>
+
+      {showCompose && fullScan && (
+        <div onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+          <ComposeEmailModal scan={fullScan} onClose={() => setShowCompose(false)} />
+        </div>
+      )}
     </div>
   );
 }

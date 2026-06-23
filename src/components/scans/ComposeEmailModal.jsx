@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { SB_URL, SB_KEY } from "../../lib/supabase";
-import { scansApi } from "../../lib/scansApi";
 import { sendEmail, blobToBase64 } from "../../lib/email";
+import { scanPdfBlob, scanPdfFilename } from "../../lib/scanPdf";
 
 /**
  * Compose & send an email with the current scan attached as a PDF.
@@ -55,10 +55,10 @@ export default function ComposeEmailModal({ scan, onClose }) {
     try {
       const attachments = [];
       if (includeAttachment && scan?.pages?.length > 0) {
-        const blob = await generateScanPdf(scan);
+        const blob = await scanPdfBlob(scan);
         const base64 = await blobToBase64(blob);
         attachments.push({
-          filename: `${(scan.title || "scan").replace(/[\/\\?%*:|"<>]/g, "_")}.pdf`,
+          filename: scanPdfFilename(scan),
           contentType: "application/pdf",
           base64,
         });
@@ -202,72 +202,3 @@ function Field({ label, hint, children }) {
   );
 }
 
-// ─── PDF generation (mirrors ScanDetail.savePdf, lazy-loaded) ────────────
-
-async function generateScanPdf(scan) {
-  const { jsPDF } = await import("jspdf");
-  const MARGIN = 6;
-  let pdf;
-  for (let i = 0; i < scan.pages.length; i++) {
-    const p = scan.pages[i];
-    const url = await scansApi.signedUrl(scansApi.visiblePath(p), 3600);
-    const composite = await composePageForExport(p, url);
-    const dataUrl = composite.toDataURL("image/jpeg", 0.92);
-    const orientation = composite.width > composite.height ? "landscape" : "portrait";
-    if (i === 0) pdf = new jsPDF({ unit: "pt", format: "letter", orientation });
-    else pdf.addPage("letter", orientation);
-
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const maxW  = pageW - MARGIN * 2;
-    const maxH  = pageH - MARGIN * 2;
-    const aspect = composite.width / composite.height;
-    let drawW = maxW, drawH = maxW / aspect;
-    if (drawH > maxH) { drawH = maxH; drawW = maxH * aspect; }
-    const offX = (pageW - drawW) / 2;
-    const offY = (pageH - drawH) / 2;
-    pdf.addImage(dataUrl, "JPEG", offX, offY, drawW, drawH, undefined, "FAST");
-  }
-  return pdf.output("blob");
-}
-
-async function composePageForExport(page, imageUrl) {
-  const img = await new Promise((resolve, reject) => {
-    const el = new Image();
-    el.crossOrigin = "anonymous";
-    el.onload  = () => resolve(el);
-    el.onerror = () => reject(new Error(`Couldn't load page ${page.page_number}`));
-    el.src = imageUrl;
-  });
-
-  const rot  = ((page.rotation || 0) % 360 + 360) % 360;
-  const swap = rot === 90 || rot === 270;
-  const w    = swap ? img.height : img.width;
-  const h    = swap ? img.width  : img.height;
-  const c    = document.createElement("canvas");
-  c.width = w; c.height = h;
-  const ctx = c.getContext("2d");
-
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, w, h);
-  ctx.translate(w / 2, h / 2);
-  ctx.rotate((rot * Math.PI) / 180);
-  ctx.drawImage(img, -img.width / 2, -img.height / 2);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-  const strokes = page.annotations?.strokes;
-  if (strokes && strokes.length) {
-    for (const s of strokes) {
-      if (!s.points || s.points.length < 2) continue;
-      ctx.strokeStyle = s.color;
-      ctx.lineWidth   = s.width;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      ctx.moveTo(s.points[0].x, s.points[0].y);
-      for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
-      ctx.stroke();
-    }
-  }
-  return c;
-}

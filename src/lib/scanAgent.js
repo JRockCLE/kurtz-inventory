@@ -12,6 +12,7 @@ const AGENT_BASE = "http://localhost:7878";
 const TIMEOUT_MS = 10_000;          // most calls
 const ENUM_TIMEOUT_MS = 30_000;     // WIA enumeration can be slow, esp. with network-discovered scanners
 const SCAN_TIMEOUT_MS = 120_000;    // a real ADF run can take a while
+const REPAIR_TIMEOUT_MS = 90_000;   // includes time for the user to click UAC + service stop/start
 
 const MOCK_KEY = "ldt_scan_use_mock";
 
@@ -170,6 +171,24 @@ export const scanAgent = {
       };
     }
     return { ok: true, result: r.data };
+  },
+
+  /**
+   * "Force Reset" the local scanner subsystem. Triggers a UAC prompt on the
+   * user's desktop, then restarts the WIA + Shell Hardware Detection services
+   * and clears the print spooler queue. Canonical fix for "WIA hangs in every
+   * app" symptoms on flaky MFPs (Canon-over-WSD is the usual culprit).
+   *
+   * The user *will* see a UAC prompt — that's the elevation handoff.
+   */
+  async repair() {
+    if (isMockMode()) {
+      await new Promise(r => setTimeout(r, 1200));
+      return { ok: true, details: '{"mock":"ok"}' };
+    }
+    const r = await call("/repair", { method: "POST", timeout: REPAIR_TIMEOUT_MS });
+    if (!r.ok) return { ok: false, error: r.error };
+    return { ok: r.data?.ok ?? true, error: r.data?.error, details: r.data?.details };
   },
 };
 

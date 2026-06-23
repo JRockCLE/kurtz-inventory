@@ -13,7 +13,20 @@ import { scanAgent, isMockMode, setMockMode, getUserName, setUserName } from "..
 export default function SetupWizard({ onComplete, onCancel, initialConfig, mode = "settings" }) {
   // mode = "scan"     → shown before every scan; button = "Save & Start Scanning"
   // mode = "settings" → user opened from settings; button = "Save Changes"
-  const [scanners, setScanners] = useState([]);
+  // Seed the dropdown with the saved scanner so the user can scan immediately
+  // even before WIA enumeration finishes (it can take 30s+ for networked scanners).
+  const savedScanner = initialConfig?.defaultScanner
+    ? [{
+        id: initialConfig.defaultScanner.id,
+        displayName: initialConfig.defaultScanner.displayName,
+        manufacturer: "",
+        hasFlatbed: true,
+        hasFeeder: true,
+        _seeded: true,
+      }]
+    : [];
+
+  const [scanners, setScanners] = useState(savedScanner);
   const [scannerId, setScannerId] = useState(initialConfig?.defaultScanner?.id || "");
   const [source, setSource] = useState(initialConfig?.defaultSource || "Flatbed");
   const [dpi, setDpi] = useState(initialConfig?.defaultDpi || 300);
@@ -21,32 +34,45 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
   const [userName, setUserNameLocal] = useState(getUserName() || "");
   const [mockEnabled, setMockEnabled] = useState(isMockMode());
 
+  // `loading` reflects whether we're still doing a *fresh* enumeration. If we
+  // seeded a saved scanner, the dropdown is already usable while this runs.
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [agentStatus, setAgentStatus] = useState(null);
   const [err, setErr] = useState(null);
 
   const loadScanners = async () => {
-    setLoading(true);
+    const hasSeed = scanners.length > 0 && scanners[0]._seeded;
+    if (hasSeed) setRefreshing(true);
+    else         setLoading(true);
     setErr(null);
-    setScanners([]);  // clear any stale entries (e.g. after toggling mock off)
+
     const ping = await scanAgent.ping();
     setAgentStatus(ping);
     if (!ping.ok) {
       setLoading(false);
+      setRefreshing(false);
       return;
     }
     const r = await scanAgent.listScanners();
     if (!r.ok) {
-      setErr(r.error);
+      // Don't blow away a working seeded scanner if enumeration fails —
+      // we'd rather let them scan with the saved default than block them.
+      if (!hasSeed) setErr(r.error);
       setLoading(false);
+      setRefreshing(false);
       return;
     }
     setScanners(r.scanners);
     if (!scannerId && r.scanners.length > 0) {
       setScannerId(r.scanners[0].id);
+    } else if (scannerId && !r.scanners.find(s => s.id === scannerId) && r.scanners.length > 0) {
+      // Saved scanner no longer present — fall back to the first found one.
+      setScannerId(r.scanners[0].id);
     }
     setLoading(false);
+    setRefreshing(false);
   };
 
   useEffect(() => { loadScanners(); }, [mockEnabled]);
@@ -149,7 +175,7 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
           {/* Scanner picker */}
           <div>
             <label className={labelCls}>Scanner</label>
-            {loading ? (
+            {loading && scanners.length === 0 ? (
               <div className="text-sm text-stone-400 py-2">Looking for scanners...</div>
             ) : scanners.length === 0 ? (
               <div className="text-sm text-stone-400 py-2 italic">No scanners found</div>
@@ -164,6 +190,12 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
                   </option>
                 ))}
               </select>
+            )}
+            {refreshing && scanners.length > 0 && (
+              <div className="text-xs text-stone-400 mt-1.5 flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                Checking for other scanners…
+              </div>
             )}
           </div>
 
