@@ -26,6 +26,28 @@ export const isMockMode = () => {
   return localStorage.getItem(MOCK_KEY) === "true";
 };
 
+// WIA error HRESULTs / patterns that mean "the scanner subsystem wedged" —
+// the classic 'Restart-Service stisvc fixes it' family. We auto-trigger the
+// repair flow when we see these. Paper jams, no-paper-in-feeder, etc. are
+// deliberately excluded — those need user action, not a service restart.
+const RETRIABLE_SCAN_PATTERNS = [
+  /0x80210006/i,   // WIA_ERROR_DEVICE_LOCKED
+  /0x80210015/i,   // WIA_ERROR_OFFLINE
+  /0x80210010/i,   // WIA_ERROR_GENERAL_ERROR (often = driver hung)
+  /0x8021000A/i,   // WIA_ERROR_BUSY
+  /0x80210066/i,   // WIA_ERROR_DEVICE_COMMUNICATION
+  /scanner_busy/i,
+  /device.*lock/i,
+  /device.*busy/i,
+  /stisvc/i,
+  /wia.*error/i,
+];
+
+export function isRetriableScanError(message) {
+  if (!message) return false;
+  return RETRIABLE_SCAN_PATTERNS.some(p => p.test(message));
+}
+
 export const setMockMode = (on) => {
   if (on) localStorage.setItem(MOCK_KEY, "true");
   else localStorage.removeItem(MOCK_KEY);
@@ -47,7 +69,16 @@ async function call(path, { method = "GET", body, timeout = TIMEOUT_MS } = {}) {
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
     if (!res.ok) {
-      return { ok: false, status: res.status, error: json?.error || json?.title || text || "Agent error", data: json };
+      // ASP.NET's Results.Problem returns RFC 7807: { title, detail, status }.
+      // `title` is the category ("Scan failed"); `detail` is the real exception
+      // message ("WIA driver error 0x80210006: device locked", etc). Prefer detail.
+      const errMsg = json?.error
+        || (json?.title && json?.detail ? `${json.title}: ${json.detail}` : null)
+        || json?.detail
+        || json?.title
+        || text
+        || "Agent error";
+      return { ok: false, status: res.status, error: errMsg, data: json };
     }
     return { ok: true, status: res.status, data: json };
   } catch (err) {

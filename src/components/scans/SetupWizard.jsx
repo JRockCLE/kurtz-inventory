@@ -42,6 +42,9 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
   const [agentStatus, setAgentStatus] = useState(null);
   const [err, setErr] = useState(null);
 
+  const [repairing, setRepairing] = useState(false);
+  const [repairMsg, setRepairMsg] = useState(null);
+
   const loadScanners = async () => {
     const hasSeed = scanners.length > 0 && scanners[0]._seeded;
     if (hasSeed) setRefreshing(true);
@@ -82,6 +85,37 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
   const handleToggleMock = (on) => {
     setMockMode(on);
     setMockEnabled(on);
+  };
+
+  const handleRepair = async () => {
+    const ok = confirm(
+      "Force Reset will:\n\n" +
+      "  • Restart the Windows Image Acquisition (scanner) service\n" +
+      "  • Restart Shell Hardware Detection\n" +
+      "  • Clear any stuck print jobs in the queue\n\n" +
+      "Windows will ask permission to make these changes. Use this when scanning hangs or freezes across every app on this PC.\n\n" +
+      "Continue?"
+    );
+    if (!ok) return;
+    setRepairing(true);
+    setRepairMsg(null);
+    const r = await scanAgent.repair();
+    setRepairing(false);
+    if (!r.ok) {
+      setRepairMsg({
+        kind: "error",
+        text: r.error === "uac_cancelled"
+          ? "Cancelled — administrator approval is required."
+          : `Reset failed: ${r.error || "unknown error"}`,
+      });
+      return;
+    }
+    setRepairMsg({
+      kind: "success",
+      text: "Done — WIA restarted and print queue cleared. Try scanning again.",
+    });
+    // Re-enumerate now that WIA is back up
+    loadScanners();
   };
 
   const handleSave = async () => {
@@ -257,6 +291,41 @@ export default function SetupWizard({ onComplete, onCancel, initialConfig, mode 
 
           {err && (
             <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">{err}</div>
+          )}
+
+          {/* Troubleshooting */}
+          {!mockEnabled && agentStatus?.ok && (
+            <div className="border-t border-stone-200 pt-4 mt-2">
+              <div className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-2">Troubleshooting</div>
+              <div className="flex items-start gap-3">
+                <button
+                  type="button"
+                  onClick={handleRepair}
+                  disabled={repairing}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors ${
+                    repairing
+                      ? "border-stone-200 text-stone-400 cursor-wait"
+                      : "border-stone-300 text-stone-700 hover:bg-stone-50"
+                  }`}
+                >
+                  {repairing ? "Resetting…" : "Force Reset"}
+                </button>
+                <p className="text-xs text-stone-400 leading-snug">
+                  If scanning hangs or freezes on this PC (in any app), this restarts the Windows scanner service and clears stuck print jobs. You'll be asked to approve administrator access.
+                </p>
+              </div>
+              {repairMsg && (
+                <div
+                  className={`mt-2 text-xs rounded-lg border p-2 ${
+                    repairMsg.kind === "success"
+                      ? "bg-green-50 border-green-200 text-green-800"
+                      : "bg-red-50 border-red-200 text-red-700"
+                  }`}
+                >
+                  {repairMsg.text}
+                </div>
+              )}
+            </div>
           )}
 
           <div className="flex gap-2 pt-2">

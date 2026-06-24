@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { scanAgent, getUserName } from "../../lib/scanAgent";
+import { scanAgent, getUserName, isRetriableScanError } from "../../lib/scanAgent";
 import { scansApi } from "../../lib/scansApi";
 import SetupWizard from "./SetupWizard";
 
@@ -21,9 +21,10 @@ export default function NewScanFlow({ onComplete, onCancel }) {
   const [config, setConfig] = useState(null);
   const [loadingConfig, setLoadingConfig] = useState(true);
 
-  const [phase, setPhase] = useState("setup");      // setup | scanning | uploading | done | error
+  const [phase, setPhase] = useState("setup");      // setup | scanning | recovering | uploading | done | error
   const [error, setError] = useState(null);
   const [scanResult, setScanResult] = useState(null);
+  const [recoveryStep, setRecoveryStep] = useState(null);  // sub-state inside "recovering"
 
   useEffect(() => {
     (async () => {
@@ -37,8 +38,30 @@ export default function NewScanFlow({ onComplete, onCancel }) {
     setPhase("scanning");
     setError(null);
 
-    // Empty body uses whatever was just saved as defaults
-    const r = await scanAgent.scan({});
+    // First attempt — empty body uses whatever was just saved as defaults
+    let r = await scanAgent.scan({});
+
+    // Auto-recovery: if the scanner subsystem wedged (the WIA-stuck family
+    // of errors), trigger the elevated repair flow and retry the scan once.
+    // The user sees one UAC prompt; otherwise the experience is invisible.
+    if (!r.ok && isRetriableScanError(r.error || r.message)) {
+      setPhase("recovering");
+      setRecoveryStep("prompt");
+
+      const repair = await scanAgent.repair();
+
+      if (!repair.ok) {
+        const cancelled = repair.error === "uac_cancelled";
+        setError(cancelled
+          ? "Recovery was cancelled. You can try the scan again, or run Force Reset from Settings if it keeps failing."
+          : `Auto-recovery failed: ${repair.error || "unknown"}. Try Force Reset from Settings.`);
+        setPhase("error");
+        return;
+      }
+
+      setRecoveryStep("retrying");
+      r = await scanAgent.scan({});
+    }
 
     if (!r.ok) {
       setError(r.message || r.error || "Scan failed");
@@ -92,7 +115,7 @@ export default function NewScanFlow({ onComplete, onCancel }) {
       <div className="bg-white border-b border-stone-200 px-4 py-3">
         <button
           onClick={onCancel}
-          disabled={phase === "scanning" || phase === "uploading"}
+          disabled={phase === "scanning" || phase === "uploading" || phase === "recovering"}
           className="px-3 py-1.5 text-sm text-stone-500 hover:text-stone-800 transition-colors disabled:opacity-50"
         >
           ← Back
@@ -105,6 +128,27 @@ export default function NewScanFlow({ onComplete, onCancel }) {
               <div className="text-7xl mb-4 animate-pulse">📄</div>
               <div className="text-2xl font-bold text-stone-700">Scanning...</div>
               <div className="text-sm text-stone-400 mt-2">This can take a minute for multi-page feeds.</div>
+            </>
+          )}
+          {phase === "recovering" && (
+            <>
+              <div className="text-7xl mb-4 animate-pulse">🔧</div>
+              {recoveryStep === "prompt" ? (
+                <>
+                  <div className="text-2xl font-bold text-stone-700">Resetting scanner...</div>
+                  <div className="text-sm text-stone-500 mt-3 leading-relaxed">
+                    The scanner needs a quick reset. <b className="text-stone-700">Click "Yes"</b> on the Windows permission prompt that's about to appear (or just appeared).
+                  </div>
+                  <div className="text-xs text-stone-400 mt-3">
+                    This restarts Windows' scanner service. Should take a few seconds.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-2xl font-bold text-stone-700">Retrying scan...</div>
+                  <div className="text-sm text-stone-400 mt-2">Reset complete — running the scan again.</div>
+                </>
+              )}
             </>
           )}
           {phase === "uploading" && (
