@@ -4,6 +4,8 @@ import NeedsLocations from "./NeedsLocations";
 import Locations from "./Locations";
 import UnprocessedItems from "./UnprocessedItems";
 import SyncToStoreLive from "./SyncToStoreLive";
+import InvoiceSettings from "./InvoiceSettings";
+import Customers from "./Customers";
 
 export default function Settings({ data }) {
   const [subtab, setSubtab] = useState("quickadd");
@@ -14,6 +16,8 @@ export default function Settings({ data }) {
     { id: "unprocessed", label: "Unprocessed Items" },
     { id: "sync", label: "Sync to StoreLIVE" },
     { id: "locations", label: "Locations" },
+    { id: "customers", label: "Customers" },
+    { id: "invoice", label: "Invoice" },
     { id: "scan-hub", label: "Scan Hub" },
   ];
 
@@ -35,6 +39,8 @@ export default function Settings({ data }) {
         {subtab === "unprocessed" && <UnprocessedItems />}
         {subtab === "sync" && <SyncToStoreLive />}
         {subtab === "locations" && <Locations />}
+        {subtab === "customers" && <Customers />}
+        {subtab === "invoice" && <InvoiceSettings />}
         {subtab === "scan-hub" && <ScanHubLauncher />}
       </div>
     </div>

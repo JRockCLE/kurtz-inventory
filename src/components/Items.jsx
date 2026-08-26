@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
-import { useLocalItems, qry, fetchItemsForNeeds } from "../lib/hooks";
+import { useLocalItems, qry, fetchItemsForNeeds, countItemOrderRefs } from "../lib/hooks";
 import { fmt$, fmtDate, compareLocation, prefixColorClass } from "../lib/helpers";
 
 // Measure text width using an offscreen canvas
@@ -62,10 +62,38 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
     <th className={`px-3 py-2 text-[10px] font-bold text-stone-500 uppercase tracking-wider whitespace-nowrap ${className}`}>{children}</th>
   );
 
+  // Smart delete: if the item has never appeared on any store list or
+  // wholesale order, remove it permanently (assumes it was a data-entry
+  // mistake and no history is worth keeping). If it has any order history,
+  // archive it so past orders keep their linkage.
   const handleDelete = async (e, item) => {
     e.stopPropagation();
-    if (!confirm(`Remove "${item.name}" from the system?`)) return;
-    await qry("local_items", { update: { active_yn: "N", updated_at: new Date().toISOString() }, match: { id: item.id } });
+    let refs;
+    try { refs = await countItemOrderRefs(item.id); }
+    catch { refs = { store_order_items: 0, wholesale_order_items: 0 }; }
+    const total = (refs.store_order_items || 0) + (refs.wholesale_order_items || 0);
+
+    if (total === 0) {
+      if (!confirm(`Delete "${item.name}"?\n\nThis item has never been on any store list or wholesale order, so it will be permanently deleted.`)) return;
+      try {
+        await qry("local_item_locations", { del: true, match: { local_item_id: item.id } });
+        await qry("local_items",          { del: true, match: { id: item.id } });
+      } catch (err) { alert(`Delete failed: ${err.message}`); return; }
+    } else {
+      const parts = [];
+      if (refs.store_order_items)     parts.push(`${refs.store_order_items} store list line(s)`);
+      if (refs.wholesale_order_items) parts.push(`${refs.wholesale_order_items} wholesale order line(s)`);
+      if (!confirm(
+        `Archive "${item.name}"?\n\n` +
+        `This item is on ${parts.join(" + ")}, so it will be moved to Archive rather than deleted (keeps history intact). You can restore or hard-delete it from the Archive page later.`
+      )) return;
+      try {
+        await qry("local_items", {
+          update: { active_yn: "N", archived_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+          match: { id: item.id },
+        });
+      } catch (err) { alert(`Archive failed: ${err.message}`); return; }
+    }
     setLocalTick(t => t + 1);
   };
 

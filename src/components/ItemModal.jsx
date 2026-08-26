@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, uploadPhoto, addItemLocation, getItemLocations, removeItemLocation, SB_URL, SB_KEY } from "../lib/hooks";
+import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, uploadPhoto, addItemLocation, getItemLocations, removeItemLocation, countItemOrderRefs, SB_URL, SB_KEY } from "../lib/hooks";
 import { imgUrl } from "../lib/helpers";
 import SearchSelect from "./SearchSelect";
 const sbH = (schema = "posbe") => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Accept-Profile": schema, "Content-Profile": schema, "Content-Type": "application/json" });
@@ -133,6 +133,9 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
     store_location: normalized.store_location || "",
     notes: normalized.notes || "",
     product_type: normalized.product_type || "dry",
+    wholesale_markup_pct: item?.wholesale_markup_pct != null ? String(item.wholesale_markup_pct) : "",
+    wholesale_case_price: item?.wholesale_case_price != null ? String(item.wholesale_case_price) : "",
+    wholesale_unit_price: item?.wholesale_unit_price != null ? String(item.wholesale_unit_price) : "",
   });
 
   // Photos
@@ -179,6 +182,73 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
   }, [isEdit]);
 
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
+
+  // Currency fields normalize to N decimal places on blur (empty stays empty).
+  const formatOnBlur = (k, decimals = 2) => (e) => {
+    const raw = e.target.value;
+    if (raw === "" || raw == null) return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    setF(prev => ({ ...prev, [k]: n.toFixed(decimals) }));
+  };
+
+  // ─── Wholesale pricing: 3-way bidirectional bind ─────────────────────
+  // markup% × case_cost → case_price → unit_price (via case_size)
+  //
+  // Whichever field the user typed is preserved as authoritative; the other
+  // two are recomputed. If case_cost or case_size are missing we still bind
+  // whatever pair we can (e.g. case↔unit price via case_size, without markup).
+  const recalcWholesale = (source, rawValue) => {
+    const raw = String(rawValue ?? "").trim();
+    const num = raw === "" ? null : Number(raw);
+    const caseCost = parseFloat(f.case_cost);         // per-case cost (dollars)
+    const caseSize = parseInt(f.case_size);           // units per case
+    const hasCost  = Number.isFinite(caseCost) && caseCost > 0;
+    const hasSize  = Number.isFinite(caseSize) && caseSize > 0;
+
+    // Start with the current values; overwrite based on source of truth.
+    const next = {
+      wholesale_markup_pct: f.wholesale_markup_pct,
+      wholesale_case_price: f.wholesale_case_price,
+      wholesale_unit_price: f.wholesale_unit_price,
+    };
+    next[source] = raw;
+
+    if (num == null || !Number.isFinite(num)) {
+      // Field was cleared — clear the derived fields too so we don't
+      // leave stale computed values lying around.
+      if (source === "wholesale_markup_pct") {
+        // If markup cleared, we no longer know what case/unit price should be
+        // from cost alone. Only clear derived if they had been computed from markup.
+      }
+      setF(prev => ({ ...prev, ...next }));
+      return;
+    }
+
+    let casePrice = null;
+    let unitPrice = null;
+    let markupPct = null;
+
+    if (source === "wholesale_markup_pct") {
+      markupPct = num;
+      if (hasCost) casePrice = caseCost * (1 + num / 100);
+      if (casePrice != null && hasSize) unitPrice = casePrice / caseSize;
+    } else if (source === "wholesale_case_price") {
+      casePrice = num;
+      if (hasCost && caseCost > 0) markupPct = ((num - caseCost) / caseCost) * 100;
+      if (hasSize) unitPrice = num / caseSize;
+    } else if (source === "wholesale_unit_price") {
+      unitPrice = num;
+      if (hasSize) casePrice = num * caseSize;
+      if (casePrice != null && hasCost && caseCost > 0) markupPct = ((casePrice - caseCost) / caseCost) * 100;
+    }
+
+    if (source !== "wholesale_markup_pct" && markupPct != null) next.wholesale_markup_pct = markupPct.toFixed(2);
+    if (source !== "wholesale_case_price" && casePrice != null) next.wholesale_case_price = casePrice.toFixed(2);
+    if (source !== "wholesale_unit_price" && unitPrice != null) next.wholesale_unit_price = unitPrice.toFixed(4);
+
+    setF(prev => ({ ...prev, ...next }));
+  };
 
   const handleUpcChange = (val) => {
     set("upc", val);
@@ -259,6 +329,9 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
         store_location: f.store_location.trim() || null,
         notes: f.notes.trim() || null,
         product_type: f.product_type || "dry",
+        wholesale_markup_pct: f.wholesale_markup_pct !== "" ? parseFloat(f.wholesale_markup_pct) : null,
+        wholesale_case_price: f.wholesale_case_price !== "" ? parseFloat(f.wholesale_case_price) : null,
+        wholesale_unit_price: f.wholesale_unit_price !== "" ? parseFloat(f.wholesale_unit_price) : null,
         photos: allPhotos,
         default_photo: defPhoto,
         updated_at: new Date().toISOString(),
@@ -284,20 +357,47 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
     setSaving(false);
   };
 
+  // Smart delete: no order history → permanent delete; any history → archive.
   const handleDelete = async () => {
     if (!isEdit || !normalized.localId) return;
-    if (!confirm(`Delete "${f.name || f.upc}"?\n\nThis will mark the item inactive and remove it from all lists.`)) return;
     setDeleting(true);
-    try {
-      await qry("local_items", {
-        schema: "public",
-        update: { active_yn: "N", updated_at: new Date().toISOString() },
-        match: { id: normalized.localId },
-      });
-      onDelete?.(normalized.localId);
-    } catch (err) {
-      alert("Error deleting: " + err.message);
-      setDeleting(false);
+    let refs;
+    try { refs = await countItemOrderRefs(normalized.localId); }
+    catch { refs = { store_order_items: 0, wholesale_order_items: 0 }; }
+    const total = (refs.store_order_items || 0) + (refs.wholesale_order_items || 0);
+
+    if (total === 0) {
+      if (!confirm(`Delete "${f.name || f.upc}"?\n\nThis item has never been on any store list or wholesale order, so it will be permanently deleted.`)) {
+        setDeleting(false);
+        return;
+      }
+      try {
+        await qry("local_item_locations", { schema: "public", del: true, match: { local_item_id: normalized.localId } });
+        await qry("local_items",          { schema: "public", del: true, match: { id: normalized.localId } });
+        onDelete?.(normalized.localId);
+      } catch (err) {
+        alert("Delete failed: " + err.message);
+        setDeleting(false);
+      }
+    } else {
+      const parts = [];
+      if (refs.store_order_items)     parts.push(`${refs.store_order_items} store list line(s)`);
+      if (refs.wholesale_order_items) parts.push(`${refs.wholesale_order_items} wholesale order line(s)`);
+      if (!confirm(
+        `Archive "${f.name || f.upc}"?\n\n` +
+        `This item is on ${parts.join(" + ")}, so it will be moved to Archive rather than deleted (keeps history intact). You can restore or hard-delete it from the Archive page later.`
+      )) { setDeleting(false); return; }
+      try {
+        await qry("local_items", {
+          schema: "public",
+          update: { active_yn: "N", archived_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+          match: { id: normalized.localId },
+        });
+        onDelete?.(normalized.localId);
+      } catch (err) {
+        alert("Archive failed: " + err.message);
+        setDeleting(false);
+      }
     }
   };
 
@@ -465,14 +565,58 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
             <div className="text-[10px] font-bold text-white uppercase tracking-wider mb-3 bg-stone-600 -mx-5 px-5 py-1.5">Pricing &amp; Cost</div>
             <div className="grid grid-cols-4 gap-3">
               <div><label className={lc}>Retail Price</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">$</span>
-                <input type="number" step="0.01" className={`${ic} pl-7`} value={f.retail_price} onChange={e => set("retail_price", e.target.value)} placeholder="0.00" /></div></div>
+                <input type="number" step="0.01" className={`${ic} pl-7`} value={f.retail_price}
+                  onChange={e => set("retail_price", e.target.value)}
+                  onBlur={formatOnBlur("retail_price")} placeholder="0.00" /></div></div>
               <div><label className={lc}>Cost Per Case</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">$</span>
-                <input type="number" step="0.01" className={`${ic} pl-7`} value={f.case_cost} onChange={e => set("case_cost", e.target.value)} placeholder="0.00" /></div></div>
+                <input type="number" step="0.01" className={`${ic} pl-7`} value={f.case_cost}
+                  onChange={e => set("case_cost", e.target.value)}
+                  onBlur={formatOnBlur("case_cost")} placeholder="0.00" /></div></div>
               <div><label className={lc}>Units Per Case</label><input type="number" className={ic} value={f.case_size} onChange={e => set("case_size", e.target.value)} placeholder="12" /></div>
               <div><label className={lc}>Unit Cost</label>
                 <div className="px-3 py-2 text-sm text-stone-600 font-medium">
                   {f.case_cost && f.case_size ? `$${(parseFloat(f.case_cost) / parseInt(f.case_size)).toFixed(2)}` : "—"}
                 </div></div>
+            </div>
+          </div>
+
+          {/* ─── WHOLESALE PRICING ─── */}
+          <div className="border-t border-stone-200 pt-4 pb-4">
+            <div className="text-[10px] font-bold text-white uppercase tracking-wider mb-3 bg-stone-600 -mx-5 px-5 py-1.5">Wholesale Pricing</div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className={lc}>Markup %</label>
+                <div className="relative">
+                  <input type="number" step="0.01" className={`${ic} pr-8`}
+                    value={f.wholesale_markup_pct}
+                    onChange={e => recalcWholesale("wholesale_markup_pct", e.target.value)}
+                    onBlur={formatOnBlur("wholesale_markup_pct")}
+                    placeholder="e.g. 25" />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">%</span>
+                </div>
+              </div>
+              <div>
+                <label className={lc}>Case Price</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">$</span>
+                  <input type="number" step="0.01" className={`${ic} pl-7`}
+                    value={f.wholesale_case_price}
+                    onChange={e => recalcWholesale("wholesale_case_price", e.target.value)}
+                    onBlur={formatOnBlur("wholesale_case_price")}
+                    placeholder="0.00" />
+                </div>
+              </div>
+              <div>
+                <label className={lc}>Unit Price</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">$</span>
+                  <input type="number" step="0.01" className={`${ic} pl-7`}
+                    value={f.wholesale_unit_price}
+                    onChange={e => recalcWholesale("wholesale_unit_price", e.target.value)}
+                    onBlur={formatOnBlur("wholesale_unit_price")}
+                    placeholder="0.00" />
+                </div>
+              </div>
             </div>
           </div>
 

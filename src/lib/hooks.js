@@ -3,6 +3,38 @@ import { useState, useEffect, useCallback } from "react";
 export const SB_URL = "https://veqsqzzymxjniagodkey.supabase.co";
 export const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZlcXNxenp5bXhqbmlhZ29ka2V5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTQ5NDIxOCwiZXhwIjoyMDkxMDcwMjE4fQ.05MhQ5FB1jEV05f435JhTMn61yEWmzPU22add0tBP64";
 
+// ─── Item order-history refs ──────────────────────────────────────────
+// Counts store-list and wholesale-order line items that reference this
+// item. Used by delete flows to decide: no history → hard-delete safely;
+// any history → archive so past orders keep their linkage.
+export async function countItemOrderRefs(itemId) {
+  const targets = [
+    { table: "store_order_items",     col: "item_id" },
+    { table: "wholesale_order_items", col: "item_id" },
+  ];
+  const out = {};
+  await Promise.all(targets.map(async t => {
+    try {
+      const res = await fetch(
+        `${SB_URL}/rest/v1/${t.table}?${t.col}=eq.${itemId}&select=${t.col}`,
+        {
+          headers: {
+            apikey: SB_KEY,
+            Authorization: `Bearer ${SB_KEY}`,
+            "Accept-Profile": "public",
+            Prefer: "count=exact",
+            Range: "0-0",
+          },
+        }
+      );
+      const range = res.headers.get("content-range") || "";
+      const total = parseInt(range.split("/")[1], 10);
+      out[t.table] = Number.isFinite(total) ? total : 0;
+    } catch { out[t.table] = 0; }
+  }));
+  return out;
+}
+
 export async function uploadPhoto(file, upc) {
   const ext = file.name?.split(".").pop() || "jpg";
   const path = `${upc}/${Date.now()}.${ext}`;
@@ -396,7 +428,7 @@ export async function fetchItemsForNeeds() {
   const batchSize = 1000;
   while (true) {
     const res = await fetch(
-      `${SB_URL}/rest/v1/local_items?active_yn=eq.Y&select=id,name,size,upc,retail_price,cases_on_hand,warehouse_location,store_location,expiration_date,dept_id,category_id,mfg_id,case_size,ref_unit_cd,product_type&order=store_location.asc.nullslast,name.asc`,
+      `${SB_URL}/rest/v1/local_items?active_yn=eq.Y&select=id,name,size,upc,retail_price,cost,cases_on_hand,warehouse_location,store_location,expiration_date,dept_id,category_id,mfg_id,case_size,ref_unit_cd,product_type,wholesale_markup_pct,wholesale_case_price,wholesale_unit_price&order=store_location.asc.nullslast,name.asc`,
       { headers: { ...sbH("public"), Range: `${offset}-${offset + batchSize - 1}` } }
     );
     const data = await res.json();

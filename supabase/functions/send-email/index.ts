@@ -71,9 +71,23 @@ Deno.serve(async (req) => {
     });
     if (!tokenRes.ok) {
       const t = await tokenRes.text();
-      // Token's no good anymore — flag for reconnect
-      await supabase.from("email_senders").update({ status: "revoked" }).eq("id", senderId);
-      return json({ error: `token_refresh_failed: ${t}` }, 401);
+      // Only flip status to `revoked` when Google says the token is genuinely
+      // dead. Transient failures (rate limits, brief 5xx, network hiccups)
+      // shouldn't wreck a sender that's fine — otherwise we churn users through
+      // reconnects for no reason. Per RFC 6749 §5.2 + Google's docs, the only
+      // definitive "this refresh token is invalid" signal is `invalid_grant`.
+      let parsed: any = null;
+      try { parsed = JSON.parse(t); } catch { /* not JSON */ }
+      const err = parsed?.error;
+
+      if (err === "invalid_grant") {
+        await supabase.from("email_senders").update({ status: "revoked" }).eq("id", senderId);
+        return json({ error: `token_refresh_failed: ${t}` }, 401);
+      }
+
+      // Transient failure — leave the sender's status alone. Surface the
+      // error so the caller can retry, but don't force a reconnect.
+      return json({ error: `token_refresh_transient: ${err || "unknown"} — ${t.slice(0, 200)}` }, 502);
     }
     const { access_token } = await tokenRes.json();
 

@@ -1,5 +1,14 @@
 export const fmt$ = (n) => n != null ? `$${parseFloat(n).toFixed(2)}` : "—";
 
+// ─── Button design tokens ─────────────────────────────────────────────
+// Apply as `className={btnPrimary}`. Same padding/rounding/text-size across
+// the app so buttons look uniform without hand-tuning each place. Combine
+// with additional utility classes as needed (`${btnPrimary} shrink-0`).
+export const btnPrimary   = "px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-bold hover:bg-amber-700 disabled:opacity-50 transition-colors";
+export const btnSecondary = "px-4 py-2 border border-stone-300 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-50 disabled:opacity-50 transition-colors";
+export const btnDanger    = "px-4 py-2 border border-red-200 text-red-600 rounded-lg text-sm font-bold hover:bg-red-50 disabled:opacity-50 transition-colors";
+export const btnGhost     = "px-4 py-2 text-sm text-stone-600 hover:text-stone-800 transition-colors";
+
 // Natural/smart sort comparator — sorts "2B" before "13A", etc.
 const _collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 export const naturalCompare = (a, b) => {
