@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
 import { qry, fetchItemsForNeeds } from "../lib/hooks";
-import { fmt$, prefixColorClass, compareLocation } from "../lib/helpers";
+import { fmt$, prefixColorClass, compareLocation, btnGhost } from "../lib/helpers";
 import { downloadWholesaleInvoice } from "../lib/wholesaleInvoicePdf";
 import CustomerPickerModal from "./CustomerPickerModal";
+import Modal from "./ui/Modal";
 
 // ─── shared UI helpers ─────────────────────────────────────────────────
 
@@ -266,7 +267,19 @@ const WholesaleItemRow = memo(function WholesaleItemRow({
 //   - location: Section A/B/C, Cooler, Freezer headers with WH Loc column filled
 //   - deptcat:  Dry/Cooler/Freezer banner + dept sub-headers (like Store Lists)
 
-function WholesalePrintView({ sortMode, locationGroups, typeGroups, unitMap, quantities, prices, orderId }) {
+function WholesalePrintView({ sortMode, locationGroups, typeGroups, unitMap, quantities, prices, orderId, scope }) {
+  // Narrow the groups to a single product_type when the user picked one
+  // via the scope modal. "all" (or unset) means print everything.
+  const active = scope && scope !== "all" ? scope : null;
+  const scopedLocation = active
+    ? locationGroups
+        .map(g => ({ ...g, items: g.items.filter(i => i.product_type === active) }))
+        .filter(g => g.items.length > 0)
+    : locationGroups;
+  const scopedType = active
+    ? typeGroups.filter(tg => tg.type === active)
+    : typeGroups;
+  const scopeLabel = active ? active.toUpperCase() : "ALL";
   const effectiveCasePrice = (item) => {
     const key = String(item.id);
     const override = prices?.[key];
@@ -329,7 +342,7 @@ function WholesalePrintView({ sortMode, locationGroups, typeGroups, unitMap, qua
           <div>
             <h1 className="text-xl font-black">KURTZ DISCOUNT GROCERIES</h1>
             <p className="text-sm font-bold">
-              WHOLESALE ORDER {orderId ? `#${orderId}` : "(NEW)"} — SORTED BY {sortMode === "location" ? "LOCATION" : "DEPARTMENT"}
+              WHOLESALE ORDER {orderId ? `#${orderId}` : "(NEW)"} — {scopeLabel} — SORTED BY {sortMode === "location" ? "LOCATION" : "DEPARTMENT"}
             </p>
           </div>
           <div className="text-right text-sm">
@@ -343,7 +356,7 @@ function WholesalePrintView({ sortMode, locationGroups, typeGroups, unitMap, qua
         <table className="w-full text-xs border-collapse" style={{ tableLayout: "auto" }}>
           <thead style={{ display: "table-header-group" }}>{printHeaderRow()}</thead>
           <tbody>
-            {locationGroups.flatMap(g => [
+            {scopedLocation.flatMap(g => [
               <tr key={`th-${g.key}`}>
                 <td colSpan={7} className="pt-3 pb-1 px-2 font-black text-sm uppercase tracking-wider text-stone-900 border-b-2 border-stone-700">
                   {g.key}
@@ -358,7 +371,7 @@ function WholesalePrintView({ sortMode, locationGroups, typeGroups, unitMap, qua
         <table className="w-full text-xs border-collapse" style={{ tableLayout: "auto" }}>
           <thead style={{ display: "table-header-group" }}>{printHeaderRow()}</thead>
           <tbody>
-            {typeGroups.flatMap(tg => [
+            {scopedType.flatMap(tg => [
               <tr key={`th-${tg.type}`}>
                 <td colSpan={7} className="pt-4 pb-1 px-2 font-black text-sm uppercase tracking-wider text-stone-900 border-b-2 border-stone-700">
                   {TYPE_DISPLAY[tg.type].label}
@@ -496,11 +509,18 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
   const [savedToast, setSavedToast] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [loadErr, setLoadErr] = useState(null);
+  const [saveErr, setSaveErr] = useState(null);
   // Which print template is currently mounted. Defaults to "full" so an
   // ad-hoc Ctrl+P behaves the same as clicking Full Item List. Toggled to
   // "pickList" temporarily when the user chooses that option.
   const [printMode, setPrintMode] = useState("full");
   const [printMenuOpen, setPrintMenuOpen] = useState(false);
+  // Which product_type slice the Item List print is scoped to. "all" or a
+  // specific type; null means "not currently prompting". The picker modal
+  // (below) sets this then triggers window.print().
+  const [printScope, setPrintScope] = useState("all");
+  const [scopePickerOpen, setScopePickerOpen] = useState(false);
 
   // Reset back to the default print template after each print job so the
   // next Ctrl+P doesn't accidentally reuse the picklist template.
@@ -575,12 +595,15 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
             // stay stable until they explicitly re-edit.
             if (li.case_price != null) p[String(li.item_id)] = String(li.case_price);
           }
+          // eslint-disable-next-line no-console
+          console.log(`[wholesale] loaded order #${initialOrderId}: ${lines?.length || 0} line(s), ${Object.keys(q).length} with qty, ${Object.keys(p).length} with price override`, { lines, prices: p });
           setQuantities(q);
           setItemNotes(n);
           setPrices(p);
         }
       } catch (err) {
         console.error("wholesale form load failed:", err);
+        if (!cancelled) setLoadErr(err.message || String(err));
       }
       if (!cancelled) setLoading(false);
     })();
@@ -825,6 +848,7 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
     }
 
     setSubmitting(true);
+    setSaveErr(null);
     try {
       // Denormalize the customer contact info onto the order so the invoice
       // stays historically stable if the customer row is edited later.
@@ -887,12 +911,16 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
             notes: itemNotes[id]?.trim() || null,
           };
         });
+        // eslint-disable-next-line no-console
+        console.log(`[wholesale] saving ${rows.length} line(s) for order #${oid}`, rows);
         await qry("wholesale_order_items", { insert: rows });
       }
 
       setSavedToast(true);
       setTimeout(() => setSavedToast(false), 1800);
     } catch (err) {
+      console.error("wholesale save failed:", err);
+      setSaveErr(err.message || String(err));
       alert("Save failed: " + err.message);
     }
     setSubmitting(false);
@@ -903,6 +931,12 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
       {savedToast && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-green-600 text-white px-5 py-2.5 rounded-lg shadow-lg text-sm font-bold flex items-center gap-2 print:hidden">
           <span>✓</span><span>Order saved</span>
+        </div>
+      )}
+      {(loadErr || saveErr) && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-red-600 text-white px-5 py-2.5 rounded-lg shadow-lg text-sm font-bold max-w-2xl print:hidden">
+          {loadErr && <div>Load failed: {loadErr}</div>}
+          {saveErr && <div>Save failed: {saveErr}</div>}
         </div>
       )}
 
@@ -916,7 +950,8 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
           unitMap={unitMap}
           quantities={quantities}
           prices={prices}
-          orderId={orderId} />
+          orderId={orderId}
+          scope={printScope} />
       )}
       {printMode === "pickList" && (
         <WholesalePickListPrintView
@@ -928,6 +963,39 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
           orderId={orderId}
           customer={customer} />
       )}
+
+      {/* Scope picker for the Item List print */}
+      <Modal
+        open={scopePickerOpen}
+        onClose={() => setScopePickerOpen(false)}
+        title="Which section?"
+        size="sm"
+        footer={
+          <button className={btnGhost} onClick={() => setScopePickerOpen(false)}>Cancel</button>
+        }>
+        <p className="text-sm text-stone-500 mb-4">
+          Print items from just one section, or all of them.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { id: "all",     label: "All",     cls: "bg-stone-800 hover:bg-stone-900" },
+            { id: "dry",     label: "Dry",     cls: "bg-amber-600 hover:bg-amber-700" },
+            { id: "cooler",  label: "Cooler",  cls: "bg-blue-600 hover:bg-blue-700" },
+            { id: "freezer", label: "Freezer", cls: "bg-green-600 hover:bg-green-700" },
+          ].map(opt => (
+            <button key={opt.id}
+              onClick={() => {
+                setPrintScope(opt.id);
+                setScopePickerOpen(false);
+                setPrintMode("full");
+                requestAnimationFrame(() => window.print());
+              }}
+              className={`px-4 py-3 text-white rounded-lg text-sm font-bold transition-colors ${opt.cls}`}>
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </Modal>
 
 
       {/* Toolbar */}
@@ -1029,14 +1097,10 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
                   <button
                     onClick={() => {
                       setPrintMenuOpen(false);
-                      setPrintMode("full");
-                      requestAnimationFrame(() => window.print());
+                      setScopePickerOpen(true);
                     }}
                     className="w-full text-left px-3 py-2 text-sm text-stone-700 hover:bg-amber-50 hover:text-amber-800">
-                    Full Item List
-                    <span className="block text-[10px] text-stone-400 mt-0.5">
-                      Sorted by {sortMode === "location" ? "warehouse location" : "department"}
-                    </span>
+                    Item List
                   </button>
                 </div>
               </>
