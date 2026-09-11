@@ -1225,9 +1225,10 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
                             item={item} ii={ii}
                             qty={quantities[String(item.id)]}
                             note={itemNotes[String(item.id)]}
+                            priceOverride={prices[String(item.id)]}
                             mfgW={mfgW} descW={descW} unitMap={unitMap}
                             readOnly={false}
-                            setQty={setQty} setNote={setNote}
+                            setQty={setQty} setNote={setNote} setPrice={setPrice}
                             handleGridNav={handleGridNav} />
                         ))}
                       </div>
