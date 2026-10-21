@@ -491,6 +491,70 @@ function WholesalePickListPrintView({ items, sectionMap, quantities, itemNotes, 
   );
 }
 
+// ─── Custom (ad-hoc) items ────────────────────────────────────────────
+// User-typed line items that aren't backed by an inventory record — e.g.
+// one-off services, delivery fees, misc. Just Description / Case $ / Qty.
+// Section auto-hides when there are no rows; toolbar "+ Add Custom Item"
+// button adds a row (and thus reveals the section).
+
+const CUSTOM_GRID = "1fr 110px 90px 100px 32px";
+
+// Strip "$" / commas before parsing so a stored "$5.00" still totals right.
+const parsePrice = (v) => { const n = parseFloat(String(v ?? "").replace(/[^0-9.]/g, "")); return Number.isFinite(n) ? n : 0; };
+
+function CustomLinesSection({ lines, onUpdate, onRemove }) {
+  if (lines.length === 0) return null;
+  return (
+    <div id="custom-items" className="border-b border-stone-200">
+      {lines.map((cl, ii) => {
+        const q = num(cl.cases_ordered);
+        const p = parsePrice(cl.case_price);
+        const lineTotal = q > 0 && p >= 0 ? q * p : 0;
+        const hasQty = q > 0;
+        return (
+          <div key={cl.localId}
+            className={`grid border-b border-stone-100 text-sm items-center ${hasQty ? "bg-amber-50" : ii % 2 ? "bg-stone-50/50" : "bg-white"}`}
+            style={{ gridTemplateColumns: CUSTOM_GRID }}>
+            <div className="px-1 py-1 border-r border-stone-100">
+              <input type="text" value={cl.description}
+                onChange={e => onUpdate(cl.localId, { description: e.target.value })}
+                placeholder="Description"
+                className="w-full px-2 py-1 text-sm border border-stone-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500" />
+            </div>
+            <div className="px-1 py-1 border-r border-stone-100 flex items-center justify-center">
+              <input type="text" inputMode="decimal" value={cl.case_price}
+                onChange={e => onUpdate(cl.localId, { case_price: e.target.value.replace(/[^0-9.$]/g, "") })}
+                onBlur={e => {
+                  const raw = e.target.value.replace(/[^0-9.]/g, "");
+                  if (raw === "") return;
+                  const n = parseFloat(raw);
+                  if (!Number.isFinite(n)) return;
+                  onUpdate(cl.localId, { case_price: `$${n.toFixed(2)}` });
+                }}
+                placeholder="Case $"
+                className="w-24 text-center py-1 rounded text-xs tabular-nums border border-stone-300 focus:outline-none focus:ring-2 focus:ring-amber-500 text-stone-700" />
+            </div>
+            <div className="px-1 py-1 border-r border-stone-100 flex items-center justify-center">
+              <input type="number" min={0} value={cl.cases_ordered || ""}
+                onChange={e => onUpdate(cl.localId, { cases_ordered: parseInt(e.target.value) || 0 })}
+                placeholder="Qty"
+                className={`w-16 text-center py-1 rounded text-sm font-bold border focus:outline-none focus:ring-2 focus:ring-amber-500 ${hasQty ? "border-amber-400 bg-amber-100 text-amber-800" : "border-stone-200 text-stone-400"}`} />
+            </div>
+            <div className="px-2 py-1.5 text-center border-r border-stone-100 text-xs font-bold text-stone-800 tabular-nums">
+              {lineTotal > 0 ? fmt$(lineTotal) : "—"}
+            </div>
+            <div className="flex items-center justify-center">
+              <button type="button" onClick={() => onRemove(cl.localId)}
+                title="Remove line"
+                className="text-stone-400 hover:text-red-500 text-lg leading-none px-1">×</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Wholesale Order Form ─────────────────────────────────────────────
 
 function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, onDone }) {
@@ -502,6 +566,10 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
   // Per-order case-price overrides. Keyed by item.id → string. Undefined =
   // "use the item's default"; empty string = "explicitly cleared".
   const [prices, setPrices] = useState({});
+  // Ad-hoc lines the user types in by hand (not backed by an inventory
+  // item). Each row: { localId, description, case_price, cases_ordered }.
+  // Persisted as wholesale_order_items with is_custom = true, item_id null.
+  const [customLines, setCustomLines] = useState([]);
   const [customer, setCustomer] = useState(initialCustomer || null);
   const [customerName, setCustomerName] = useState(initialCustomer?.business_name || "");
   const [orderNotes, setOrderNotes] = useState("");
@@ -587,7 +655,17 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
             }
           }
           const q = {}, n = {}, p = {};
+          const customs = [];
           for (const li of lines || []) {
+            if (li.is_custom) {
+              customs.push({
+                localId: `saved-${li.id}`,
+                description: li.item_name || "",
+                case_price: li.case_price != null ? `$${Number(li.case_price).toFixed(2)}` : "",
+                cases_ordered: li.cases_ordered || 0,
+              });
+              continue;
+            }
             if (li.cases_ordered > 0) q[String(li.item_id)] = li.cases_ordered;
             if (li.notes) n[String(li.item_id)] = li.notes;
             // Restore the case price the user had on this order — even if
@@ -596,10 +674,11 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
             if (li.case_price != null) p[String(li.item_id)] = String(li.case_price);
           }
           // eslint-disable-next-line no-console
-          console.log(`[wholesale] loaded order #${initialOrderId}: ${lines?.length || 0} line(s), ${Object.keys(q).length} with qty, ${Object.keys(p).length} with price override`, { lines, prices: p });
+          console.log(`[wholesale] loaded order #${initialOrderId}: ${lines?.length || 0} line(s), ${Object.keys(q).length} with qty, ${Object.keys(p).length} with price override, ${customs.length} custom`, { lines, prices: p });
           setQuantities(q);
           setItemNotes(n);
           setPrices(p);
+          setCustomLines(customs);
         }
       } catch (err) {
         console.error("wholesale form load failed:", err);
@@ -740,6 +819,21 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
     });
   }, []);
 
+  const addCustomLine = useCallback(() => {
+    setCustomLines(prev => [
+      ...prev,
+      { localId: `new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, description: "", case_price: "", cases_ordered: 0 },
+    ]);
+  }, []);
+
+  const updateCustomLine = useCallback((localId, patch) => {
+    setCustomLines(prev => prev.map(l => l.localId === localId ? { ...l, ...patch } : l));
+  }, []);
+
+  const removeCustomLine = useCallback((localId) => {
+    setCustomLines(prev => prev.filter(l => l.localId !== localId));
+  }, []);
+
   // Effective case price for an item: user's override wins over the item's default.
   const effectivePriceFor = useCallback((it) => {
     if (!it) return 0;
@@ -804,8 +898,16 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
       const it = allItems.find(i => String(i.id) === id);
       amount += qty * effectivePriceFor(it);
     }
+    for (const cl of customLines) {
+      const q = num(cl.cases_ordered);
+      if (q <= 0 || !cl.description?.trim()) continue;
+      const p = parseFloat(String(cl.case_price ?? "").replace(/[^0-9.]/g, "")) || 0;
+      items += 1;
+      cases += q;
+      amount += q * p;
+    }
     return { items, cases, amount };
-  }, [quantities, allItems, effectivePriceFor]);
+  }, [quantities, allItems, effectivePriceFor, customLines]);
 
   const scrollTo = useCallback((id) => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -886,31 +988,56 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
         ...Object.keys(quantities),
         ...Object.keys(itemNotes).filter(k => itemNotes[k]?.trim()),
       ]);
-      if (ids.size > 0) {
-        const rows = [...ids].map(id => {
-          const it = allItems.find(i => String(i.id) === id);
-          const q = quantities[id] || 0;
-          // Snapshot the effective case price (per-order override wins). Derive
-          // unit price from case + case_size for the invoice math.
-          const effectiveCase = effectivePriceFor(it);
-          const cp = effectiveCase > 0 ? Number(effectiveCase.toFixed(2)) : null;
-          const cs = it?.case_size ? Number(it.case_size) : null;
-          const up = cp != null && cs ? Number((cp / cs).toFixed(4)) : null;
-          return {
-            order_id: oid,
-            item_id: it?.id ?? null,
-            item_name: it?.name || "Unknown",
-            item_size: it?.size || null,
-            case_size: cs,
-            mfg_name: it?._mfg_name || null,
-            warehouse_location: it?.warehouse_location || null,
-            cases_ordered: q,
-            unit_price: up,
-            case_price: cp,
-            line_total: q > 0 && cp != null ? Number((q * cp).toFixed(2)) : null,
-            notes: itemNotes[id]?.trim() || null,
-          };
+      const rows = [...ids].map(id => {
+        const it = allItems.find(i => String(i.id) === id);
+        const q = quantities[id] || 0;
+        // Snapshot the effective case price (per-order override wins). Derive
+        // unit price from case + case_size for the invoice math.
+        const effectiveCase = effectivePriceFor(it);
+        const cp = effectiveCase > 0 ? Number(effectiveCase.toFixed(2)) : null;
+        const cs = it?.case_size ? Number(it.case_size) : null;
+        const up = cp != null && cs ? Number((cp / cs).toFixed(4)) : null;
+        return {
+          order_id: oid,
+          item_id: it?.id ?? null,
+          item_name: it?.name || "Unknown",
+          item_size: it?.size || null,
+          case_size: cs,
+          mfg_name: it?._mfg_name || null,
+          warehouse_location: it?.warehouse_location || null,
+          cases_ordered: q,
+          unit_price: up,
+          case_price: cp,
+          line_total: q > 0 && cp != null ? Number((q * cp).toFixed(2)) : null,
+          notes: itemNotes[id]?.trim() || null,
+          is_custom: false,
+        };
+      });
+      for (const cl of customLines) {
+        const desc = cl.description?.trim();
+        const q = parseInt(cl.cases_ordered) || 0;
+        // Skip empty draft rows — a line needs at least a description AND
+        // qty > 0 to be worth saving.
+        if (!desc || q <= 0) continue;
+        const priceStr = String(cl.case_price ?? "").replace(/[^0-9.]/g, "");
+        const cp = priceStr === "" ? null : Number(Number(priceStr).toFixed(2));
+        rows.push({
+          order_id: oid,
+          item_id: null,
+          item_name: desc,
+          item_size: null,
+          case_size: null,
+          mfg_name: null,
+          warehouse_location: null,
+          cases_ordered: q,
+          unit_price: null,
+          case_price: cp,
+          line_total: cp != null ? Number((q * cp).toFixed(2)) : null,
+          notes: null,
+          is_custom: true,
         });
+      }
+      if (rows.length > 0) {
         // eslint-disable-next-line no-console
         console.log(`[wholesale] saving ${rows.length} line(s) for order #${oid}`, rows);
         await qry("wholesale_order_items", { insert: rows });
@@ -1053,6 +1180,11 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
         {/* Right cluster: totals + Print + Save. `ml-auto` keeps them right-aligned
             without a greedy `flex-1` spacer that misbehaves with flex-wrap. */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          <button onClick={addCustomLine}
+            className="px-3 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-sm hover:bg-stone-200"
+            title="Add a one-off line (description + case $ + qty)">
+            + Add Custom Item
+          </button>
           {totals.items > 0 && (
             <span className="text-sm text-amber-700 font-semibold">
               {totals.items} items / {totals.cases} cs / <span className="text-stone-800">{fmt$(totals.amount)}</span>
@@ -1125,6 +1257,15 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
           </button>
           {tocOpen && (
             <div className="flex-1 overflow-auto py-1">
+              {customLines.length > 0 && (
+                <div className="mb-1">
+                  <button onClick={() => scrollTo("custom-items")}
+                    className="w-full text-left px-3 py-1 text-xs font-bold text-amber-700 hover:bg-stone-200 flex justify-between items-center">
+                    <span className="truncate">Custom Items</span>
+                    <span className="text-stone-400 shrink-0 ml-2 font-normal">{customLines.length}</span>
+                  </button>
+                </div>
+              )}
               {sortMode === "location" && visibleLocationGroups.map(g => {
                 // For "Section X" buckets, generate aisle sub-buttons at
                 // AISLE_INTERVAL steps — but only when at least one item in
@@ -1174,6 +1315,14 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
 
         {/* Content */}
         <div className="flex-1 overflow-auto print:overflow-visible">
+          {!loading && (
+            <div className="print:hidden">
+              <CustomLinesSection
+                lines={customLines}
+                onUpdate={updateCustomLine}
+                onRemove={removeCustomLine} />
+            </div>
+          )}
           {loading ? (
             <div className="p-8 text-center text-stone-400">Loading items...</div>
           ) : !hasAnyGroup ? (
