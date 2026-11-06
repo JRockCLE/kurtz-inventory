@@ -16,6 +16,7 @@ import Archive from "./components/Archive";
 import ScanHub from "./components/scans/ScanHub";
 import ItemModal from "./components/ItemModal";
 import SettingsModal from "./components/SettingsModal";
+import MobileShell from "./components/mobile/MobileShell";
 
 // ─── Top-nav modules ──────────────────────────────────────────────────
 //   Each module lives at #{id} in the URL hash. Modules with sub-pages
@@ -65,7 +66,29 @@ function parseHash() {
   return { module, sub: sub || null };
 }
 
+// Returns true when the URL hash points at the mobile shell (#m or #m/...).
+// Checked before any desktop state is set up so the two layouts never
+// mount at the same time.
+function isMobileHash() {
+  if (typeof window === "undefined") return false;
+  const raw = window.location.hash.replace("#", "");
+  return raw === "m" || raw.startsWith("m/");
+}
+
 export default function App() {
+  const [onMobileRoute, setOnMobileRoute] = useState(isMobileHash);
+  useEffect(() => {
+    const onHash = () => setOnMobileRoute(isMobileHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  if (onMobileRoute) return <MobileShell />;
+
+  return <DesktopApp />;
+}
+
+function DesktopApp() {
   const [{ module, sub }, setNav] = useState(parseHash);
   const [selectedOrder, setSelectedOrder]     = useState(null);
   const [selectedRecvDoc, setSelectedRecvDoc] = useState(null);
