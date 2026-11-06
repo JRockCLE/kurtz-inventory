@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import MobileReceive from "./MobileReceive";
 
 // ─── Mobile shell ─────────────────────────────────────────────────────
 // Dashboard-first mobile UI. Lives at `#m` / `#m/<screen>` and
@@ -99,8 +100,8 @@ function TaskScreen({ screen, onBack }) {
         <div className="font-bold text-base">{title}</div>
       </div>
 
-      <div className="flex-1 overflow-auto">
-        <Placeholder screen={screen} />
+      <div className="flex-1 overflow-hidden">
+        {screen === "receive" ? <MobileReceive /> : <Placeholder screen={screen} />}
       </div>
     </>
   );
