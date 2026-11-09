@@ -20,7 +20,8 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
   const [page, setPage] = useState(0);
   const [productType, setProductType] = useState(null); // null = All
   const [localTick, setLocalTick] = useState(0);
-  const [locMap, setLocMap] = useState({}); // { itemId: [{ location, is_primary }] }
+  const [locMap, setLocMap] = useState({});   // { itemId: [{ location, is_primary }] } — warehouse
+  const [srLocMap, setSrLocMap] = useState({}); // { itemId: [{ location, is_primary }] } — stock room
   const [showPrintMenu, setShowPrintMenu] = useState(false);
   const [printItems, setPrintItems] = useState(null); // { items, sortLabel }
   const [printLoading, setPrintLoading] = useState(false);
@@ -159,16 +160,16 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
         }
       }
 
-      const labels = { dept: "Department", mfg: "Manufacturer", wh_loc: "Warehouse Location", store_loc: "Store Location", wholesale: "Wholesale List" };
+      const labels = { dept: "Department", mfg: "Manufacturer", wh_loc: "Warehouse Location", store_loc: "SR Location", wholesale: "Wholesale List" };
       setPrintItems({ items: allItems, sortOption, sortLabel: labels[sortOption] });
       setTimeout(() => { window.print(); }, 300);
     } catch (err) { alert("Error loading items: " + err.message); }
     setPrintLoading(false);
   }, [deptMap, productType]);
 
-  // Fetch locations for displayed items
+  // Fetch locations (warehouse + stock room) for displayed items
   useEffect(() => {
-    if (!items.length) { setLocMap({}); return; }
+    if (!items.length) { setLocMap({}); setSrLocMap({}); return; }
     const ids = items.map(i => i.id).join(",");
     qry("local_item_locations", {
       select: "local_item_id,location,is_primary,sort_order",
@@ -182,6 +183,19 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
       });
       setLocMap(m);
     }).catch(() => setLocMap({}));
+
+    qry("local_item_store_locations", {
+      select: "local_item_id,location,is_primary,sort_order",
+      filters: `local_item_id=in.(${ids})`,
+      order: "sort_order.asc,is_primary.desc,location.asc",
+    }).then(locs => {
+      const m = {};
+      locs.forEach(l => {
+        if (!m[l.local_item_id]) m[l.local_item_id] = [];
+        m[l.local_item_id].push(l);
+      });
+      setSrLocMap(m);
+    }).catch(() => setSrLocMap({}));
   }, [items]);
 
   const vendorMap = Object.fromEntries((data.vendors || []).map(v => [v.Vendor_ID, v.Vendor_Name_TX]));
@@ -215,7 +229,7 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
                     { id: "dept", label: "Department" },
                     { id: "mfg", label: "Manufacturer (A-Z)" },
                     { id: "wh_loc", label: "Warehouse Location" },
-                    { id: "store_loc", label: "Store Location" },
+                    { id: "store_loc", label: "SR Location" },
                   ].map(opt => (
                     <button key={opt.id} onClick={() => preparePrint(opt.id)}
                       className="w-full text-left px-3 py-2 text-sm text-stone-700 hover:bg-amber-50 hover:text-amber-800">
@@ -277,8 +291,8 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
               <ColHead col="ref_unit_cd" className="text-left w-[50px] border-r border-stone-200">Unit</ColHead>
               <ColHead col="dept_id" className="text-left w-[90px]">Dept</ColHead>
               <ColHead col="category_id" className="text-left w-[100px] border-r border-stone-200">Category</ColHead>
-              <ColHead col="warehouse_location" className="text-left w-[160px]">WH Locations</ColHead>
-              <ColHead col="store_location" className="text-left w-[80px] border-r border-stone-200">Store Loc</ColHead>
+              <ColHead col="warehouse_location" className="text-left w-[100px]">WH Locations</ColHead>
+              <ColHead col="store_location" className="text-left w-[100px] border-r border-stone-200">SR Locations</ColHead>
               <ColHead col="retail_price" className="text-center w-[65px]">Price</ColHead>
               <ColHead col="cases_on_hand" className="text-center w-[55px]">Cases</ColHead>
               <ColHead col="expiration_date" className="text-center w-[70px] border-r border-stone-200">Exp</ColHead>
@@ -304,7 +318,9 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
                 return (
                   <tr key={item.id} onClick={() => onEdit?.(item)}
                     className={`border-b border-stone-100 hover:bg-amber-50/70 transition-colors cursor-pointer ${i % 2 ? "bg-stone-50/40" : "bg-white"}`}>
-                    <td className="px-3 py-1.5 text-[11px] text-stone-500 font-mono truncate">{item.upc || "—"}</td>
+                    <td className="px-3 py-1.5">
+                      <div className="text-[11px] text-stone-500 font-mono truncate max-w-[110px]" title={item.upc || ""}>{item.upc || "—"}</div>
+                    </td>
                     <td className="px-3 py-1.5 text-xs text-stone-500 truncate" title={mfgRaw}>{mfgShort}</td>
                     <td className="px-3 py-1.5">
                       <div className="font-medium text-stone-800 truncate max-w-[300px]" title={item.name}>{item.name}</div>
@@ -319,16 +335,34 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
                         ? locs.map(l => l.location)
                         : (item.warehouse_location ? [item.warehouse_location] : []);
                       return (
-                        <td className="px-3 py-1.5 text-xs font-medium truncate" title={labels.join(" ")}>
-                          {labels.length === 0 ? "—" : (
-                            <span className="inline-flex gap-2">
-                              {labels.map((l, k) => <span key={k} className={prefixColorClass(l)}>{l}</span>)}
-                            </span>
-                          )}
+                        <td className="px-3 py-1.5" title={labels.join(" ")}>
+                          <div className="text-xs font-medium truncate max-w-[88px]">
+                            {labels.length === 0 ? "—" : (
+                              <span className="inline-flex gap-2">
+                                {labels.map((l, k) => <span key={k} className={prefixColorClass(l)}>{l}</span>)}
+                              </span>
+                            )}
+                          </div>
                         </td>
                       );
                     })()}
-                    <td className="px-3 py-1.5 text-xs text-stone-500 border-r border-stone-100">{item.store_location || "—"}</td>
+                    {(() => {
+                      const srLocs = srLocMap[item.id];
+                      const labels = srLocs?.length
+                        ? srLocs.map(l => l.location)
+                        : (item.store_location ? [item.store_location] : []);
+                      return (
+                        <td className="px-3 py-1.5 border-r border-stone-100" title={labels.join(" ")}>
+                          <div className="text-xs font-medium truncate max-w-[88px]">
+                            {labels.length === 0 ? "—" : (
+                              <span className="inline-flex gap-2 text-stone-600">
+                                {labels.map((l, k) => <span key={k}>{l}</span>)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })()}
                     <td className="px-3 py-1.5 text-center text-stone-600 tabular-nums text-xs">{item.retail_price ? fmt$(item.retail_price) : "—"}</td>
                     <td className={`px-3 py-1.5 text-center font-bold tabular-nums ${isLow ? "text-red-600" : qty > 0 ? "text-stone-700" : "text-stone-300"}`}>{qty || "—"}</td>
                     <td className={`px-3 py-1.5 text-center text-[11px] tabular-nums border-r border-stone-100 ${isExpired ? "text-red-600 font-bold" : "text-stone-500"}`}>{fmtDate(item.expiration_date)}</td>
@@ -383,7 +417,7 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
             <thead style={{ display: "table-header-group" }}>
               <tr className="border-b-2 border-stone-400 text-[10px] font-bold text-stone-600 uppercase">
                 {printItems.sortOption === "wh_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">WH Loc</th>}
-                {printItems.sortOption === "store_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">Store Loc</th>}
+                {printItems.sortOption === "store_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">SR Loc</th>}
                 <th className="px-2 py-1.5 text-left">Mfg</th>
                 <th className="px-2 py-1.5 text-left">Description</th>
                 <th className="px-2 py-1.5 text-center whitespace-nowrap">Size/Unit</th>
@@ -391,7 +425,7 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
                 <th className="px-2 py-1.5 text-center whitespace-nowrap">Price</th>
                 <th className="px-2 py-1.5 text-center whitespace-nowrap">Cases</th>
                 {printItems.sortOption !== "wh_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">WH Loc</th>}
-                {printItems.sortOption !== "store_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">Store Loc</th>}
+                {printItems.sortOption !== "store_loc" && <th className="px-2 py-1.5 text-left whitespace-nowrap">SR Loc</th>}
               </tr>
             </thead>
             <tbody>

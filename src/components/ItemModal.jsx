@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, uploadPhoto, addItemLocation, getItemLocations, removeItemLocation, countItemOrderRefs, SB_URL, SB_KEY } from "../lib/hooks";
+import { qry, searchVendors, searchDepts, searchCategories, searchSubCategories, searchUnits, searchLocations, searchStockRoomLocations, uploadPhoto, addItemLocation, getItemLocations, removeItemLocation, addItemStoreLocation, getItemStoreLocations, removeItemStoreLocation, countItemOrderRefs, SB_URL, SB_KEY } from "../lib/hooks";
 import { imgUrl } from "../lib/helpers";
 import SearchSelect from "./SearchSelect";
 const sbH = (schema = "posbe") => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Accept-Profile": schema, "Content-Profile": schema, "Content-Type": "application/json" });
@@ -176,6 +176,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
   const [noBarcode, setNoBarcode] = useState(false);
   // Draft locations for new-item creation (LocationsManager only works for existing rows).
   const [draftLocations, setDraftLocations] = useState([""]);
+  const [draftStoreLocations, setDraftStoreLocations] = useState([""]);
 
   useEffect(() => {
     if (!isEdit && barcodeRef.current) setTimeout(() => barcodeRef.current?.focus(), 100);
@@ -310,6 +311,8 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
       // In create mode, the primary warehouse_location is the first non-empty draft location.
       const trimmedDrafts = isEdit ? [] : draftLocations.map(s => s.trim()).filter(Boolean);
       const primaryLocation = isEdit ? (f.warehouse_location.trim() || null) : (trimmedDrafts[0] || null);
+      const trimmedStoreDrafts = isEdit ? [] : draftStoreLocations.map(s => s.trim()).filter(Boolean);
+      const primaryStoreLocation = isEdit ? (f.store_location.trim() || null) : (trimmedStoreDrafts[0] || null);
 
       const payload = {
         upc: noBarcode ? null : (f.upc.trim() || null),
@@ -326,7 +329,7 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
         case_size: f.case_size ? parseInt(f.case_size) : null,
         cases_on_hand: parseInt(f.cases_on_hand) || 0,
         warehouse_location: primaryLocation,
-        store_location: f.store_location.trim() || null,
+        store_location: primaryStoreLocation,
         notes: f.notes.trim() || null,
         product_type: f.product_type || "dry",
         wholesale_markup_pct: f.wholesale_markup_pct !== "" ? parseFloat(f.wholesale_markup_pct) : null,
@@ -349,6 +352,11 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
         if (created?.id && trimmedDrafts.length) {
           for (let i = 0; i < trimmedDrafts.length; i++) {
             try { await addItemLocation(created.id, trimmedDrafts[i], i === 0, i); } catch { /* dup */ }
+          }
+        }
+        if (created?.id && trimmedStoreDrafts.length) {
+          for (let i = 0; i < trimmedStoreDrafts.length; i++) {
+            try { await addItemStoreLocation(created.id, trimmedStoreDrafts[i], i === 0, i); } catch { /* dup */ }
           }
         }
       }
@@ -666,7 +674,47 @@ export default function ItemModal({ item, categories, depts, vendors, units, onS
                   </div>
                 )}
               </div>
-              <div><label className={lc}>Store Location</label><input className={ic} value={f.store_location} onChange={e => set("store_location", e.target.value)} placeholder="e.g., Aisle 4" /></div>
+              <div>
+                <label className={lc}>Stock Room Location</label>
+                {isEdit && normalized.localId ? (
+                  <StoreLocationsManager localItemId={normalized.localId}
+                    onPrimaryChange={(label) => set("store_location", label || "")} />
+                ) : (
+                  <div className="border border-stone-200 rounded-lg bg-white">
+                    <div className="divide-y divide-stone-100">
+                      {draftStoreLocations.map((loc, i) => {
+                        const filledCount = draftStoreLocations.filter(l => l.trim()).length;
+                        return (
+                          <div key={i} className="flex items-center gap-2 px-2 py-1.5">
+                            <span className="text-stone-300 select-none text-[10px] w-4 text-center">{i + 1}</span>
+                            <div className="flex-1 min-w-0">
+                              <SearchSelect value={loc} displayValue={loc}
+                                fetchOptions={(q) => searchStockRoomLocations(q, "backroom")}
+                                onSelect={(v) => setDraftStoreLocations(prev => prev.map((l, idx) => idx === i ? (v || "") : l))}
+                                placeholder={i === 0 ? "Primary location..." : "Additional location..."} />
+                            </div>
+                            {i === 0 && filledCount > 1 && (
+                              <span className="text-[10px] italic text-amber-600 shrink-0">Primary</span>
+                            )}
+                            {draftStoreLocations.length > 1 && (
+                              <button type="button"
+                                onClick={() => setDraftStoreLocations(prev => prev.filter((_, idx) => idx !== i))}
+                                className="text-stone-300 hover:text-red-500 text-lg leading-none px-1" title="Remove">×</button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="border-t border-stone-100 p-2">
+                      <button type="button"
+                        onClick={() => setDraftStoreLocations(prev => [...prev, ""])}
+                        className="text-[11px] font-bold uppercase tracking-wide text-amber-600 hover:text-amber-700">
+                        + Add Location
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <div><label className={lc}>Notes</label><input className={ic} value={f.notes} onChange={e => set("notes", e.target.value)} placeholder="Additional info..." /></div>
           </div>
@@ -886,6 +934,152 @@ function LocationsManager({ localItemId, onPrimaryChange }) {
               <div className="flex-1 min-w-0">
                 <SearchSelect value={row.location} displayValue={row.location}
                   fetchOptions={searchLocations}
+                  onSelect={(v) => v && swap(i, v)}
+                  placeholder={row._draft ? "Select a location..." : "Click to swap..."} />
+              </div>
+              {i === 0 && !row._draft && (
+                <span className="text-[10px] italic text-amber-600 shrink-0">Primary</span>
+              )}
+              <button type="button" disabled={busy} onClick={() => remove(i)}
+                className="text-stone-300 hover:text-red-500 text-lg leading-none px-1" title="Remove">×</button>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="border-t border-stone-100 p-2">
+        <button type="button" onClick={addBlank} disabled={busy || rows.some(r => r._draft)}
+          className="text-[11px] font-bold uppercase tracking-wide text-amber-600 hover:text-amber-700 disabled:opacity-50">
+          + Add Location
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Mirror of LocationsManager above, but for store locations. Pulls/pushes
+// against local_item_store_locations and keeps local_items.store_location
+// in sync as the cached primary.
+function StoreLocationsManager({ localItemId, onPrimaryChange }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [draggingIdx, setDraggingIdx] = useState(null);
+  const [overIdx, setOverIdx] = useState(null);
+  const initialLoaded = useRef(false);
+
+  const load = useCallback(async () => {
+    if (!initialLoaded.current) setLoading(true);
+    try {
+      const data = await getItemStoreLocations(localItemId);
+      setRows(data);
+      initialLoaded.current = true;
+    } finally { setLoading(false); }
+  }, [localItemId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const syncPrimary = useCallback(async (label) => {
+    await qry("local_items", {
+      update: { store_location: label || null, updated_at: new Date().toISOString() },
+      match: { id: localItemId },
+    });
+    onPrimaryChange?.(label);
+  }, [localItemId, onPrimaryChange]);
+
+  const persistOrder = async (next) => {
+    for (let i = 0; i < next.length; i++) {
+      const r = next[i];
+      if (!r.id) continue;
+      if (r.sort_order === i && r.is_primary === (i === 0)) continue;
+      await qry("local_item_store_locations", {
+        update: { sort_order: i, is_primary: i === 0, updated_at: new Date().toISOString() },
+        match: { id: r.id },
+      });
+    }
+    await syncPrimary(next[0]?.location || null);
+  };
+
+  const handleDrop = async (e, dropIdx) => {
+    e.preventDefault();
+    const from = draggingIdx;
+    setDraggingIdx(null);
+    setOverIdx(null);
+    if (from == null || from === dropIdx) return;
+    const reordered = [...rows];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(dropIdx, 0, moved);
+    const synced = reordered.map((r, i) => ({ ...r, sort_order: i, is_primary: i === 0 }));
+    setRows(synced);
+    setBusy(true);
+    try { await persistOrder(synced); }
+    catch (err) { alert("Error: " + err.message); await load(); }
+    setBusy(false);
+  };
+
+  const swap = async (idx, newLocation) => {
+    if (!newLocation) return;
+    const row = rows[idx];
+    if (row && row.location === newLocation) return;
+    if (rows.some((r, i) => i !== idx && r.location === newLocation)) {
+      alert("That location is already in the list.");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (row?._draft) {
+        await addItemStoreLocation(localItemId, newLocation, idx === 0, idx);
+      } else {
+        await qry("local_item_store_locations", {
+          update: { location: newLocation, updated_at: new Date().toISOString() },
+          match: { id: row.id },
+        });
+      }
+      await load();
+      if (idx === 0) await syncPrimary(newLocation);
+    } catch (err) { alert("Error: " + err.message); }
+    setBusy(false);
+  };
+
+  const remove = async (idx) => {
+    const row = rows[idx];
+    if (row._draft) { setRows(rows.filter((_, i) => i !== idx)); return; }
+    if (!confirm(`Remove "${row.location}"?`)) return;
+    setBusy(true);
+    try {
+      await removeItemStoreLocation(row.id);
+      const next = rows.filter((_, i) => i !== idx);
+      setRows(next);
+      await persistOrder(next);
+      if (next.length === 0) await syncPrimary(null);
+    } catch (err) { alert("Error: " + err.message); }
+    setBusy(false);
+  };
+
+  const addBlank = () => {
+    if (rows.some(r => r._draft)) return;
+    setRows([...rows, { id: null, location: "", is_primary: false, sort_order: rows.length, _draft: true }]);
+  };
+
+  return (
+    <div className="border border-stone-200 rounded-lg bg-white">
+      <div className="divide-y divide-stone-100">
+        {loading ? (
+          <div className="px-3 py-2 text-xs text-stone-400">Loading...</div>
+        ) : rows.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-stone-400">No stock room locations assigned yet.</div>
+        ) : (
+          rows.map((row, i) => (
+            <div key={row.id ?? `draft-${i}`}
+              draggable={!row._draft && !busy}
+              onDragStart={() => setDraggingIdx(i)}
+              onDragEnd={() => { setDraggingIdx(null); setOverIdx(null); }}
+              onDragOver={(e) => { e.preventDefault(); if (overIdx !== i) setOverIdx(i); }}
+              onDrop={(e) => handleDrop(e, i)}
+              className={`flex items-center gap-2 px-2 py-1.5 transition-colors ${draggingIdx === i ? "opacity-40" : ""} ${overIdx === i && draggingIdx !== i ? "bg-amber-50" : ""}`}>
+              <span className={`text-stone-300 select-none ${row._draft ? "" : "cursor-grab"}`} title="Drag to reorder">⋮⋮</span>
+              <div className="flex-1 min-w-0">
+                <SearchSelect value={row.location} displayValue={row.location}
+                  fetchOptions={(q) => searchStockRoomLocations(q, "backroom")}
                   onSelect={(v) => v && swap(i, v)}
                   placeholder={row._draft ? "Select a location..." : "Click to swap..."} />
               </div>

@@ -12,6 +12,8 @@ import QuickAdd from "./components/QuickAdd";
 import UnprocessedItems from "./components/UnprocessedItems";
 import NeedsLocations from "./components/NeedsLocations";
 import Locations from "./components/Locations";
+import StockRoomLocations from "./components/StockRoomLocations";
+import NeedsStockRoomLocations from "./components/NeedsStockRoomLocations";
 import Archive from "./components/Archive";
 import ScanHub from "./components/scans/ScanHub";
 import ItemModal from "./components/ItemModal";
@@ -30,13 +32,15 @@ const MODULES = [
     id: "items",
     label: "Item Management",
     sub: [
-      { id: "active",          label: "Items" },
-      { id: "archived",        label: "Archived Items",      indent: true },
-      { id: "locations",       label: "Warehouse Locations" },
-      { type: "header",        label: "Tasks" },
-      { id: "quick-add",       label: "Quick Add",           indent: true },
-      { id: "unprocessed",     label: "Unprocessed Items",   indent: true },
-      { id: "needs-locations", label: "Needs Locations",     indent: true },
+      { id: "active",            label: "Items" },
+      { id: "archived",          label: "Archived Items",      indent: true },
+      { id: "locations",         label: "Warehouse Locations" },
+      { id: "stock-room-locs",   label: "Stock Room Locations" },
+      { type: "header",          label: "Tasks" },
+      { id: "quick-add",         label: "Quick Add",             indent: true },
+      { id: "unprocessed",       label: "Unprocessed Items",     indent: true },
+      { id: "needs-locations",   label: "Needs Locations",       indent: true },
+      { id: "needs-sr-locs",     label: "Stock Room Locations",  indent: true },
     ],
   },
   { id: "store-lists", label: "Store Lists" },
@@ -262,11 +266,13 @@ function DesktopApp() {
         {/* Content */}
         <div className="flex-1 overflow-hidden print:overflow-visible">
           {module === "items" && effectiveSub === "active"          && <Items data={data} onEdit={handleEditItem} onAdd={handleAddItem} refreshTick={itemsRefresh} />}
-          {module === "items" && effectiveSub === "archived"        && <Archive />}
+          {module === "items" && effectiveSub === "archived"        && <Archive data={data} />}
           {module === "items" && effectiveSub === "quick-add"       && <QuickAdd />}
           {module === "items" && effectiveSub === "unprocessed"     && <UnprocessedItems />}
           {module === "items" && effectiveSub === "needs-locations" && <NeedsLocations data={data} />}
+          {module === "items" && effectiveSub === "needs-sr-locs"   && <NeedsStockRoomLocations data={data} />}
           {module === "items" && effectiveSub === "locations"       && <Locations />}
+          {module === "items" && effectiveSub === "stock-room-locs" && <StockRoomLocations />}
 
           {module === "receiving" && !selectedRecvDoc && (
             <ReceivingList onSelect={id => setSelectedRecvDoc(id)} onCreate={() => setSelectedRecvDoc("new")} />

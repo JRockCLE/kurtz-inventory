@@ -230,6 +230,35 @@ export async function removeItemLocation(locationRowId) {
   return qry("local_item_locations", { del: true, match: { id: locationRowId } });
 }
 
+// ─── Item store-location helpers ───
+// Mirror of the warehouse location helpers above, but for the stock
+// room (local_item_store_locations). The item row's `store_location`
+// column still holds the cached primary label.
+export async function addItemStoreLocation(localItemId, location, isPrimary = false, sortOrder = 0) {
+  return qry("local_item_store_locations", {
+    insert: { local_item_id: localItemId, location, is_primary: isPrimary, sort_order: sortOrder },
+  });
+}
+
+export async function getItemStoreLocations(localItemId) {
+  return qry("local_item_store_locations", {
+    select: "id,location,is_primary,sort_order",
+    filters: `local_item_id=eq.${localItemId}`,
+    order: "sort_order.asc,is_primary.desc,location.asc",
+  });
+}
+
+export async function setPrimaryStoreLocation(locationRowId) {
+  return qry("local_item_store_locations", {
+    update: { is_primary: true, updated_at: new Date().toISOString() },
+    match: { id: locationRowId },
+  });
+}
+
+export async function removeItemStoreLocation(locationRowId) {
+  return qry("local_item_store_locations", { del: true, match: { id: locationRowId } });
+}
+
 // ─── Vendor search (for manufacturer typeahead) ───
 export async function searchVendors(typed) {
   const filter = typed ? `Vendor_Name_TX=ilike.*${encodeURIComponent(typed)}*&` : "";
@@ -496,6 +525,20 @@ export async function searchUnits(typed) {
   );
   if (!res.ok) return [];
   return (await res.json()).map(u => ({ value: u.Unit_ID, label: u.Unit_Name_TX }));
+}
+
+// Autocomplete for the item's in-store `store_location` field. Pulls
+// from stock_room_locations filtered by scope (default "backroom").
+export async function searchStockRoomLocations(typed, scope = "backroom") {
+  const filter = typed ? `label=ilike.*${typed}*&` : "";
+  const data = await qry("stock_room_locations", {
+    select: "id,label,scope,notes",
+    filters: `${filter}scope=eq.${scope}&active_yn=eq.Y`,
+    limit: 100,
+  });
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  data.sort((a, b) => collator.compare(a.label || "", b.label || ""));
+  return data.map(l => ({ value: l.label, label: l.label + (l.notes ? `  —  ${l.notes}` : "") }));
 }
 
 // ─── Location fuzzy search ───

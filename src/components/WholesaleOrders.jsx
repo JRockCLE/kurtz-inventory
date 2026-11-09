@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from "react";
 import { qry, fetchItemsForNeeds } from "../lib/hooks";
 import { fmt$, prefixColorClass, compareLocation, btnGhost } from "../lib/helpers";
-import { downloadWholesaleInvoice } from "../lib/wholesaleInvoicePdf";
+import { downloadWholesaleInvoice, generateWholesaleInvoice } from "../lib/wholesaleInvoicePdf";
 import CustomerPickerModal from "./CustomerPickerModal";
 import Modal from "./ui/Modal";
 
@@ -1393,13 +1393,80 @@ function WholesaleOrderForm({ data, orderId: initialOrderId, initialCustomer, on
   );
 }
 
+// ─── Document preview ─────────────────────────────────────────────────
+// Default view when the user taps a saved invoice from the list: shows
+// the generated PDF inline. "Edit Order" hops over to the form; "Back"
+// returns to the list. The blob URL is revoked on unmount so we don't
+// leak memory while the user bounces between invoices.
+
+function WholesaleOrderDocument({ orderId, onBack, onEdit, onDownload }) {
+  const [pdfUrl, setPdfUrl] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let currentUrl = null;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { pdf } = await generateWholesaleInvoice(orderId);
+        if (cancelled) return;
+        const blob = pdf.output("blob");
+        currentUrl = URL.createObjectURL(blob);
+        setPdfUrl(currentUrl);
+      } catch (err) {
+        if (!cancelled) setError(err.message || String(err));
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+    };
+  }, [orderId]);
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="bg-white border-b border-stone-200 px-4 py-3 flex items-center gap-3">
+        <button onClick={onBack} className="text-stone-500 hover:text-stone-800 text-sm shrink-0">← Back</button>
+        <h2 className="text-base font-bold text-stone-800 shrink-0">Invoice #{orderId}</h2>
+        <div className="flex-1" />
+        <button onClick={onDownload}
+          className="px-3 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-sm hover:bg-stone-200">
+          Download PDF
+        </button>
+        <button onClick={onEdit}
+          className="px-4 py-1.5 bg-amber-600 text-white rounded-lg text-sm font-bold hover:bg-amber-700">
+          Edit Order
+        </button>
+      </div>
+      <div className="flex-1 bg-stone-200">
+        {loading && (
+          <div className="p-8 text-center text-stone-500 text-sm">Generating preview…</div>
+        )}
+        {error && !loading && (
+          <div className="p-8 text-center text-red-600 text-sm">
+            Preview failed: {error}
+          </div>
+        )}
+        {pdfUrl && !loading && !error && (
+          <iframe src={pdfUrl} title={`Invoice ${orderId}`} className="w-full h-full border-0" />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── List of existing wholesale orders ────────────────────────────────
 
 export default function WholesaleOrders({ data }) {
   // View states:
-  //   "list"                             — index of orders
-  //   { customer }                       — new order for the picked customer
-  //   { id }                             — editing an existing order (loads its customer)
+  //   "list"                                           — index of orders
+  //   { customer, mode: "form" }                       — new order for the picked customer
+  //   { id, mode: "document" }                         — PDF preview of an existing order
+  //   { id, mode: "form", fromDocument?: boolean }     — editor for an existing order
   const [view, setView] = useState("list");
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1426,10 +1493,29 @@ export default function WholesaleOrders({ data }) {
   };
 
   if (typeof view === "object" && view !== null) {
+    if (view.mode === "document") {
+      return <WholesaleOrderDocument
+        orderId={view.id}
+        onBack={() => { setView("list"); load(); }}
+        onEdit={() => setView({ id: view.id, mode: "form", fromDocument: true })}
+        onDownload={async () => {
+          try { await downloadWholesaleInvoice(view.id); }
+          catch (e) { alert(`Download failed: ${e.message}`); }
+        }} />;
+    }
     return <WholesaleOrderForm data={data}
       orderId={view.id || null}
       initialCustomer={view.customer || null}
-      onDone={() => { setView("list"); load(); }} />;
+      onDone={() => {
+        // Came in from the document view → return there so the user sees
+        // their edits applied. Otherwise fall back to the list.
+        if (view.fromDocument && view.id) {
+          setView({ id: view.id, mode: "document" });
+        } else {
+          setView("list");
+          load();
+        }
+      }} />;
   }
 
   return (
@@ -1445,7 +1531,7 @@ export default function WholesaleOrders({ data }) {
       {pickerOpen && (
         <CustomerPickerModal
           onClose={() => setPickerOpen(false)}
-          onSelect={(customer) => { setPickerOpen(false); setView({ customer }); }} />
+          onSelect={(customer) => { setPickerOpen(false); setView({ customer, mode: "form" }); }} />
       )}
 
       <div className="flex-1 overflow-auto bg-stone-50">
@@ -1463,7 +1549,7 @@ export default function WholesaleOrders({ data }) {
               <div key={o.id}
                 className="px-4 py-3 bg-white hover:bg-stone-50 transition-colors grid items-center gap-3 cursor-pointer"
                 style={{ gridTemplateColumns: "100px 1fr 120px 130px auto" }}
-                onClick={() => setView({ id: o.id })}>
+                onClick={() => setView({ id: o.id, mode: "document" })}>
                 <div className="text-sm font-bold text-stone-800">Invoice #{o.id}</div>
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-stone-800 truncate">
