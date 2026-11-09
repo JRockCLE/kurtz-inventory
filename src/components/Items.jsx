@@ -204,7 +204,7 @@ export default function Items({ data, onEdit, onAdd, refreshTick = 0 }) {
     <div className="flex flex-col h-full">
       <div className="bg-white border-b border-stone-200 px-4 py-3 print:hidden">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-bold text-stone-800">Warehouse Items</h2>
+          <h2 className="text-lg font-bold text-stone-800">Items</h2>
           <div className="flex items-center gap-3">
             <span className="text-xs text-stone-400">
               {total.toLocaleString()} items{totalPages > 1 && ` • Page ${page + 1} of ${totalPages.toLocaleString()}`}

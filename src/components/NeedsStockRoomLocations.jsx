@@ -28,6 +28,7 @@ export default function NeedsStockRoomLocations({ data }) {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState(null);
   const [search, setSearch] = useState("");
+  const [productType, setProductType] = useState(null); // null = All
   const [sortField, setSortField] = useState("created_at");
   const [sortDir, setSortDir] = useState("desc");
 
@@ -103,6 +104,7 @@ export default function NeedsStockRoomLocations({ data }) {
         (i._mfg_name || "").toLowerCase().includes(s)
       );
     }
+    if (productType) list = list.filter(i => i.product_type === productType);
     const getVal = SORT_FIELDS[sortField] || SORT_FIELDS.created_at;
     const sorted = [...list].sort((a, b) => {
       const va = getVal(a), vb = getVal(b);
@@ -111,7 +113,7 @@ export default function NeedsStockRoomLocations({ data }) {
       return 0;
     });
     return sorted;
-  }, [items, search, sortField, sortDir]);
+  }, [items, search, productType, sortField, sortDir]);
 
   const SortTh = ({ field, label, className = "" }) => {
     const active = sortField === field;
@@ -150,11 +152,24 @@ export default function NeedsStockRoomLocations({ data }) {
       </div>
 
       {/* Toolbar */}
-      <div className="bg-stone-50 border-b border-stone-200 px-3 md:px-4 py-2.5 flex items-center gap-2">
+      <div className="bg-stone-50 border-b border-stone-200 px-3 md:px-4 py-2.5 flex items-center gap-3 flex-wrap">
         <input
           value={search} onChange={e => setSearch(e.target.value)}
           placeholder="Search name, UPC, or manufacturer…"
           className="w-full md:w-72 px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+        <div className="flex items-center gap-1.5">
+          {[
+            { v: null,      label: "All",     active: "bg-stone-700 text-white" },
+            { v: "dry",     label: "Dry",     active: "bg-amber-600 text-white" },
+            { v: "cooler",  label: "Cooler",  active: "bg-blue-600 text-white" },
+            { v: "freezer", label: "Freezer", active: "bg-green-600 text-white" },
+          ].map(c => (
+            <button key={c.label} onClick={() => setProductType(c.v)}
+              className={`px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide transition-colors ${productType === c.v ? c.active : "bg-stone-100 text-stone-600 hover:bg-stone-200"}`}>
+              {c.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Grid */}
